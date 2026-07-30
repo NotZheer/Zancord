@@ -1,0 +1,17 @@
+{
+  "name": "zancord",
+  "version": "1.0.0",
+  "description": "ZanCord - Peer-to-Peer 1080p Stream & Voice App",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

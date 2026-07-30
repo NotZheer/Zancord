@@ -1,0 +1,25 @@
+[package]
+name = "zancord"
+version = "1.0.0"
+description = "ZanCord Native P2P Stream App"
+authors = ["Antigravity"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+tauri = { version = "2" }
+tauri-plugin-shell = "2"
+tauri-plugin-process = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"
+webkit2gtk-sys = "2.0.2"
+glib = "0.18"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
