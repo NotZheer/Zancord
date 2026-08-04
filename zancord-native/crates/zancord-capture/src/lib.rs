@@ -20,3 +20,21 @@ pub use traits::{
     CaptureConfig, CaptureSource, CaptureSourceType, CapturedAudioFrame, CapturedVideoFrame,
     PixelFormat, ScreenCapturer,
 };
+
+/// Creates the platform screen capturer.
+#[cfg(target_os = "macos")]
+pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
+    Ok(Box::new(crate::macos::MacScreenCapturer::new()))
+}
+
+/// Creates the platform screen capturer.
+#[cfg(target_os = "linux")]
+pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
+    Ok(Box::new(crate::linux::LinuxScreenCapturer::new()))
+}
+
+/// Creates the platform screen capturer.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
+    anyhow::bail!("screen capture is not supported on this platform")
+}

@@ -16,3 +16,4 @@ tracing = { workspace = true }
 # macOS:  screencapturekit, core-foundation, core-video, objc2
 # Linux:  ashpd, pipewire, spa
 [target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "8", features = ["macos_13_0"] }
