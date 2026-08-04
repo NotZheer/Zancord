@@ -141,25 +141,28 @@ async fn wait_for_room_state(
 }
 
 /// Rebuilds the mesh with a fresh server-assigned id (signaling reconnect
-/// assigns a new id; the old mesh's peer connections are stale).
+/// assigns a new id; the old mesh's peer connections are stale). Returns the
+/// mesh and its event receiver — the receiver is subscribed BEFORE the peers
+/// join so no `PeerConnected` is lost (a lost event silences that peer).
 async fn rebuild_mesh(
     old: Option<MeshManager>,
     new_id: &str,
     peers: &[PeerInfo],
     mesh_sig_tx: mpsc::Sender<SignalMessage>,
-) -> anyhow::Result<MeshManager> {
+) -> anyhow::Result<(MeshManager, tokio::sync::broadcast::Receiver<MeshEvent>)> {
     if let Some(mut mesh) = old {
         if let Err(err) = mesh.shutdown().await {
             warn!(error = %err, "old mesh shutdown failed");
         }
     }
     let mut mesh = MeshManager::new(new_id.to_owned(), mesh_sig_tx, MESH_CAPACITY)?;
+    let events = mesh.event_rx();
     for peer in peers.iter().filter(|p| p.id != new_id) {
         if let Err(err) = mesh.handle_peer_joined(peer.clone()).await {
             warn!(peer = %peer.id, error = %err, "join failed for existing peer");
         }
     }
-    Ok(mesh)
+    Ok((mesh, events))
 }
 
 #[tokio::main]
@@ -216,6 +219,10 @@ async fn main() -> anyhow::Result<()> {
         MeshManager::new(self_id.clone(), mesh_sig_tx.clone(), MESH_CAPACITY)
             .context("mesh creation failed")?,
     );
+    // Subscribe BEFORE joining the initial peers: `PeerConnected` is broadcast
+    // during `handle_peer_joined`, and a lost event means the incoming audio
+    // channel for that peer is never claimed — silent one-way audio.
+    let mut mesh_events = mesh.as_ref().expect("mesh exists").event_rx();
     for peer in initial_peers.iter().filter(|p| p.id != self_id) {
         mesh.as_mut()
             .expect("mesh exists")
@@ -238,7 +245,6 @@ async fn main() -> anyhow::Result<()> {
     .context("audio pipeline failed to start")?;
     info!("audio pipeline running (mic -> Opus -> mesh, mesh -> mix -> speakers)");
 
-    let mut mesh_events = mesh.as_ref().expect("mesh exists").event_rx();
     let mut local_state = MediaStatePayload {
         mic_enabled: true,
         ..Default::default()
@@ -272,8 +278,10 @@ async fn main() -> anyhow::Result<()> {
                     if current.as_deref() != Some(new_self.id.as_str()) {
                         info!(new_id = %new_self.id, "reconnected with a new peer id; rebuilding mesh");
                         let old = mesh.take();
-                        mesh = Some(rebuild_mesh(old, &new_self.id, peers, mesh_sig_tx.clone()).await?);
-                        mesh_events = mesh.as_ref().expect("mesh exists").event_rx();
+                        let (new_mesh, new_events) =
+                            rebuild_mesh(old, &new_self.id, peers, mesh_sig_tx.clone()).await?;
+                        mesh = Some(new_mesh);
+                        mesh_events = new_events;
                     } else {
                         let mesh_ref = mesh.as_mut().expect("mesh exists");
                         let local_id = mesh_ref.local_id().to_string();
@@ -336,15 +344,23 @@ async fn main() -> anyhow::Result<()> {
                     MeshEvent::PeerConnected { peer_id } => {
                         let Some(mesh) = mesh.as_mut() else { continue };
                         if let Some(mut rx) = mesh.take_incoming_audio(&peer_id) {
+                            info!(peer = %peer_id, "claimed incoming audio channel");
                             let tagged = audio_in_tx.clone();
                             let pid = peer_id.clone();
                             tokio::spawn(async move {
+                                let mut first = true;
                                 while let Some(frame) = rx.recv().await {
+                                    if first {
+                                        info!(peer = %pid, "first remote audio frame forwarded");
+                                        first = false;
+                                    }
                                     if tagged.send((pid.clone(), frame)).await.is_err() {
                                         return;
                                     }
                                 }
                             });
+                        } else {
+                            warn!(peer = %peer_id, "incoming audio channel already claimed or missing");
                         }
                     }
                     MeshEvent::PeerDisconnected { peer_id } => {

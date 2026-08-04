@@ -25,11 +25,15 @@ const VIDEO_CLOCK_RATE: u64 = 90_000;
 /// Send loop for the shared mic/screen-audio track. Consumes encoded Opus
 /// frames from the audio pipeline and writes one 20 ms `Sample` per frame.
 ///
-/// Exits when the channel closes or every bound peer connection is gone.
+/// Exits only when the channel closes. Write errors are non-fatal: the
+/// answering side's track binds BEFORE ICE/DTLS completes, so early frames
+/// legitimately fail until the transport is up — killing the loop there would
+/// silence us forever.
 pub async fn audio_send_loop(
     track: Arc<TrackLocalStaticSample>,
     mut rx: mpsc::Receiver<EncodedAudioFrame>,
 ) {
+    let mut last_warn = std::time::Instant::now() - Duration::from_secs(6);
     while let Some(frame) = rx.recv().await {
         let sample = Sample {
             data: Bytes::from(frame.data),
@@ -37,10 +41,10 @@ pub async fn audio_send_loop(
             ..Default::default()
         };
         if let Err(err) = track.write_sample(&sample).await {
-            // write_sample only errors when ALL bindings failed — the mesh is
-            // gone (or every peer closed); stop the loop.
-            warn!(error = %err, "audio send loop ending (all bindings failed)");
-            return;
+            if last_warn.elapsed() >= Duration::from_secs(5) {
+                warn!(error = %err, "audio write failed (transport not ready?); continuing");
+                last_warn = std::time::Instant::now();
+            }
         }
     }
     debug!("audio send loop ended (channel closed)");
@@ -48,10 +52,14 @@ pub async fn audio_send_loop(
 
 /// Send loop for a shared video track (camera or screen). Writes one
 /// `Sample` per encoded frame with `1000/fps` ms duration.
+///
+/// Exits only when the channel closes; write errors are non-fatal (see
+/// [`audio_send_loop`] for why).
 pub async fn video_send_loop(
     track: Arc<TrackLocalStaticSample>,
     mut rx: mpsc::Receiver<EncodedVideoFrame>,
 ) {
+    let mut last_warn = std::time::Instant::now() - Duration::from_secs(6);
     while let Some(frame) = rx.recv().await {
         // Guard against a broken fps value (0 or absurd) — fall back to 33 ms.
         let millis = 1000u32.checked_div(frame.fps).unwrap_or(33).max(1);
@@ -61,8 +69,10 @@ pub async fn video_send_loop(
             ..Default::default()
         };
         if let Err(err) = track.write_sample(&sample).await {
-            warn!(error = %err, "video send loop ending (all bindings failed)");
-            return;
+            if last_warn.elapsed() >= Duration::from_secs(5) {
+                warn!(error = %err, "video write failed (transport not ready?); continuing");
+                last_warn = std::time::Instant::now();
+            }
         }
     }
     debug!("video send loop ended (channel closed)");

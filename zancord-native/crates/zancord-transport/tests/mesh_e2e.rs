@@ -162,6 +162,87 @@ async fn two_peers_exchange_opus_frames() {
     b.shutdown().await.expect("b shuts down");
 }
 
+/// Regression test for the one-way-audio bug: the answering side's track binds
+/// BEFORE ICE/DTLS completes, so frames written in that window used to kill the
+/// send loop (write_sample errors) and silence the answerer forever.
+#[tokio::test]
+async fn early_audio_writes_do_not_kill_the_send_loop() {
+    let (a_sig_tx, mut a_sig_rx) = mpsc::channel(1024);
+    let (b_sig_tx, mut b_sig_rx) = mpsc::channel(1024);
+    let mut a = MeshManager::new("aaa".to_owned(), a_sig_tx, 5).expect("mesh a");
+    let mut b = MeshManager::new("bbb".to_owned(), b_sig_tx, 5).expect("mesh b");
+    let mut a_events = a.event_rx();
+    let mut b_events = b.event_rx();
+
+    // Pump Opus frames into a's track from the very start — including while
+    // the SDP exchange is still in flight (a is the ANSWERER here: aaa < bbb,
+    // so b offers and a answers).
+    let early_tx = a.audio_tx();
+    let early_writer = tokio::spawn(async move {
+        let mut seq = 0u64;
+        loop {
+            if early_tx
+                .send(EncodedAudioFrame {
+                    data: vec![0xde, 0xad, 0xbe, 0xef],
+                    sequence: seq,
+                    timestamp_ms: seq * 20,
+                })
+                .await
+                .is_err()
+            {
+                return;
+            }
+            seq += 1;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    });
+
+    a.handle_peer_joined(peer_info("bbb"))
+        .await
+        .expect("a joins b");
+    b.handle_peer_joined(peer_info("aaa"))
+        .await
+        .expect("b joins a");
+
+    pump_until_ice_connected(
+        &mut a_sig_rx,
+        &mut b,
+        &mut b_sig_rx,
+        &mut a,
+        &mut a_events,
+        &mut b_events,
+    )
+    .await;
+
+    // The answerer's send loop must have survived the negotiation window —
+    // early frames that got through after ICE connected are buffered in the
+    // incoming channel; drain them, then verify fresh frames still arrive.
+    let mut b_audio = b.take_incoming_audio("aaa").expect("b audio channel");
+    while let Ok(f) = b_audio.try_recv() {
+        if f.sequence >= 10_000 {
+            break;
+        }
+    }
+    let frame = EncodedAudioFrame {
+        data: vec![1, 2, 3],
+        sequence: 10_000,
+        timestamp_ms: 20,
+    };
+    a.audio_tx()
+        .send(frame.clone())
+        .await
+        .expect("a sends frame");
+    let got = timeout(Duration::from_secs(5), b_audio.recv())
+        .await
+        .expect("answerer's audio must still arrive")
+        .expect("channel open");
+    assert_eq!(got.data, frame.data);
+
+    early_writer.abort();
+    a.shutdown().await.expect("a shuts down");
+    b.shutdown().await.expect("b shuts down");
+}
+
 /// Drives one signaling message into the receiving negotiator.
 async fn deliver(sig_tx: &mpsc::Sender<SignalMessage>, msg: SignalMessage, neg: &Negotiator) {
     match msg {
