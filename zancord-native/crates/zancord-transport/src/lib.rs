@@ -5,6 +5,7 @@
 
 pub mod bridge;
 pub mod engine;
+pub mod h264_rtp;
 pub mod mesh;
 pub mod negotiation;
 pub mod peer;

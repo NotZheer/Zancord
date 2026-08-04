@@ -15,6 +15,8 @@ use webrtc::track::track_remote::TrackRemote;
 
 use zancord_protocol::{EncodedAudioFrame, EncodedVideoFrame};
 
+use crate::h264_rtp::{annexb_contains_keyframe, H264Depacketizer};
+
 /// Opus frame duration (48 kHz, 20 ms — matches the audio pipeline).
 pub const AUDIO_FRAME_DURATION: Duration = Duration::from_millis(20);
 /// Opus RTP clock rate.
@@ -101,22 +103,32 @@ pub async fn audio_receive_loop(track: Arc<TrackRemote>, tx: mpsc::Sender<Encode
     }
 }
 
-/// Receive loop for a remote video track. Forwards every RTP payload as an
-/// `EncodedVideoFrame` with a best-effort keyframe flag.
+/// Receive loop for a remote video track. Reassembles RTP payloads into
+/// encoded frames: H.264 payloads are depacketized (RFC 6184 — STAP-A and
+/// FU-A) into Annex-B chunks for the decoder; VP8 payloads pass through
+/// unchanged (one partition per RTP packet).
 pub async fn video_receive_loop(track: Arc<TrackRemote>, tx: mpsc::Sender<EncodedVideoFrame>) {
+    let mut h264 = H264Depacketizer::default();
     loop {
         match track.read_rtp().await {
             Ok((pkt, _)) => {
                 let mime = track.codec().capability.mime_type.to_lowercase();
-                let keyframe = if mime.contains("vp8") {
-                    vp8_is_keyframe(&pkt.payload)
-                } else if mime.contains("h264") {
-                    h264_is_keyframe(&pkt.payload)
+                let is_h264 = mime.contains("h264");
+                let (data, keyframe) = if is_h264 {
+                    match h264.depacketize(&pkt.payload) {
+                        Some(nal) => (nal.to_vec(), annexb_contains_keyframe(&nal)),
+                        None => continue, // intermediate FU-A fragment
+                    }
                 } else {
-                    false
+                    let keyframe = if mime.contains("vp8") {
+                        vp8_is_keyframe(&pkt.payload)
+                    } else {
+                        false
+                    };
+                    (pkt.payload.to_vec(), keyframe)
                 };
                 let frame = EncodedVideoFrame {
-                    data: pkt.payload.to_vec(),
+                    data,
                     keyframe,
                     width: 0,
                     height: 0,
@@ -180,36 +192,6 @@ fn vp8_is_keyframe(payload: &[u8]) -> bool {
     }
 }
 
-/// Best-effort H.264 keyframe detection: NAL unit type 5 (IDR) or 7 (SPS);
-/// also scans STAP-A aggregates (type 24) for contained IDR/SPS NALs.
-fn h264_is_keyframe(payload: &[u8]) -> bool {
-    let Some(&first) = payload.first() else {
-        return false;
-    };
-    let nal_type = first & 0x1f;
-    match nal_type {
-        5 | 7 => true,
-        24 => stap_a_contains_keyframe(&payload[1..]),
-        _ => false,
-    }
-}
-
-fn stap_a_contains_keyframe(rest: &[u8]) -> bool {
-    let mut i = 0usize;
-    while i + 2 <= rest.len() {
-        let nal_size = u16::from_be_bytes([rest[i], rest[i + 1]]) as usize;
-        i += 2;
-        if nal_size == 0 || i + nal_size > rest.len() {
-            return false;
-        }
-        if matches!(rest[i] & 0x1f, 5 | 7) {
-            return true;
-        }
-        i += nal_size;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,19 +222,6 @@ mod tests {
         let with_ext_inter = [0x90, 0x80, 0x2b, 0x01];
         assert!(!vp8_is_keyframe(&with_ext_inter));
         assert!(!vp8_is_keyframe(&[]));
-    }
-
-    #[test]
-    fn h264_keyframe_detection() {
-        assert!(h264_is_keyframe(&[0x65, 0x88, 0x84])); // IDR
-        assert!(h264_is_keyframe(&[0x67, 0x42, 0xe0])); // SPS
-        assert!(!h264_is_keyframe(&[0x41, 0x9a])); // non-IDR slice
-                                                   // STAP-A containing an SPS NAL.
-        let stap = [0x78, 0x00, 0x03, 0x67, 0x42, 0xe0];
-        assert!(h264_is_keyframe(&stap));
-        let stap_inter = [0x78, 0x00, 0x02, 0x41, 0x9a];
-        assert!(!h264_is_keyframe(&stap_inter));
-        assert!(!h264_is_keyframe(&[]));
     }
 
     #[test]

@@ -16,6 +16,7 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 futures-util = { workspace = true }
+rtp = "0.12"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 
 [dev-dependencies]
