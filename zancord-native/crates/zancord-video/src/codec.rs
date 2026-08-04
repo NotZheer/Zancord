@@ -4,6 +4,8 @@
 use zancord_protocol::{EncodedVideoFrame, VideoCodec};
 
 use crate::convert::I420Frame;
+use crate::h264_decoder::H264Decoder;
+use crate::h264_encoder::H264Encoder;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoEncoderConfig {
@@ -44,12 +46,57 @@ pub trait VideoDecoder: Send + 'static {
     fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<I420Frame>>;
 }
 
-/// Create the concrete encoder for `codec`. Implemented in Phase 3C.
-pub fn create_encoder(_config: &VideoEncoderConfig) -> anyhow::Result<Box<dyn VideoEncoder>> {
-    anyhow::bail!("encoder not implemented until Phase 3C")
+/// Create the concrete encoder for `codec`.
+pub fn create_encoder(config: &VideoEncoderConfig) -> anyhow::Result<Box<dyn VideoEncoder>> {
+    match config.codec {
+        VideoCodec::H264 => Ok(Box::new(H264Encoder::new(
+            config.width,
+            config.height,
+            config.fps,
+            config.bitrate_bps,
+        )?)),
+        VideoCodec::VP8 => {
+            anyhow::bail!(
+                "VP8 encoder unavailable: the vpx crate is unusable (codec interfaces disabled)"
+            )
+        }
+    }
 }
 
-/// Create the concrete decoder for `codec`. Implemented in Phase 3C.
-pub fn create_decoder(_codec: VideoCodec) -> anyhow::Result<Box<dyn VideoDecoder>> {
-    anyhow::bail!("decoder not implemented until Phase 3C")
+/// Create the concrete decoder for `codec`.
+pub fn create_decoder(codec: VideoCodec) -> anyhow::Result<Box<dyn VideoDecoder>> {
+    match codec {
+        VideoCodec::H264 => Ok(Box::new(H264Decoder::new()?)),
+        VideoCodec::VP8 => {
+            anyhow::bail!(
+                "VP8 decoder unavailable: the vpx crate is unusable (codec interfaces disabled)"
+            )
+        }
+    }
+}
+
+impl VideoEncoder for H264Encoder {
+    fn encode(&mut self, frame: &I420Frame) -> anyhow::Result<EncodedVideoFrame> {
+        self.encode_frame(frame)
+    }
+
+    fn force_keyframe(&mut self) {
+        self.force_keyframe()
+    }
+
+    fn set_bitrate(&mut self, bitrate_bps: u32) {
+        self.set_bitrate(bitrate_bps)
+    }
+
+    fn set_resolution(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        // openh264 re-initializes on the next encode when dimensions change.
+        let _ = (width, height);
+        Ok(())
+    }
+}
+
+impl VideoDecoder for H264Decoder {
+    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<I420Frame>> {
+        self.decode(data)
+    }
 }

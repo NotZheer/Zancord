@@ -10,3 +10,4 @@ zancord-protocol = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+openh264 = "0.6"

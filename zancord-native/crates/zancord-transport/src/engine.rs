@@ -1,6 +1,8 @@
 //! Media engine setup (Phase 1D.1): register Opus/VP8/H.264 codecs and build
 //! the configured `webrtc::api::API` used by every peer connection.
 
+use std::sync::OnceLock;
+
 use anyhow::Result;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use webrtc::api::{APIBuilder, API};
@@ -95,8 +97,26 @@ pub fn new_media_engine() -> Result<MediaEngine> {
     Ok(engine)
 }
 
+/// Installs the process-wide rustls `CryptoProvider` (ring), exactly once.
+///
+/// rustls 0.23 panics when it cannot infer a provider from crate features.
+/// That happens whenever the workspace feature-unifies BOTH `ring` and
+/// `aws-lc-rs` (the signaling server's axum-server dependency enables the
+/// latter), which makes `webrtc-dtls`'s implicit provider lookup fail for
+/// every connection. Installing the ring provider explicitly (matching
+/// webrtc-dtls's own ring-based stack) makes DTLS setup deterministic in
+/// any build. Safe to call from tests and the app alike.
+pub fn init_crypto_provider() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        // Err only means a provider was already installed — both are fine.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Builds the shared `API` (media engine + default no-op interceptor registry).
 pub fn build_api() -> Result<API> {
+    init_crypto_provider();
     Ok(APIBuilder::new()
         .with_media_engine(new_media_engine()?)
         .build())
@@ -145,5 +165,16 @@ mod tests {
     fn api_builds() {
         let api = build_api().expect("api builds");
         let _ = api.media_engine();
+    }
+
+    #[test]
+    fn crypto_provider_installed() {
+        // Regression: the workspace feature-unifies rustls `ring` + `aws-lc-rs`
+        // (axum-server), so DTLS would panic without an explicit provider.
+        init_crypto_provider();
+        assert!(
+            rustls::crypto::CryptoProvider::get_default().is_some(),
+            "a default rustls CryptoProvider must be installed"
+        );
     }
 }

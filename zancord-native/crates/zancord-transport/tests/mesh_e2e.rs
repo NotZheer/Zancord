@@ -214,15 +214,13 @@ async fn early_audio_writes_do_not_kill_the_send_loop() {
     )
     .await;
 
-    // The answerer's send loop must have survived the negotiation window —
-    // early frames that got through after ICE connected are buffered in the
-    // incoming channel; drain them, then verify fresh frames still arrive.
-    let mut b_audio = b.take_incoming_audio("aaa").expect("b audio channel");
-    while let Ok(f) = b_audio.try_recv() {
-        if f.sequence >= 10_000 {
-            break;
-        }
-    }
+    // The answerer's send loop must have survived the negotiation window.
+    // Early frames that got through after ICE connected keep flushing through
+    // the webrtc pipeline (and the writer keeps pumping every 5 ms), so wait
+    // for the marker frame by payload instead of draining a fixed window.
+    // Note: `EncodedAudioFrame::sequence` is NOT preserved on the wire — the
+    // receive loop reports the RTP sequence number — so it cannot be used to
+    // distinguish early frames here.
     let frame = EncodedAudioFrame {
         data: vec![1, 2, 3],
         sequence: 10_000,
@@ -232,10 +230,18 @@ async fn early_audio_writes_do_not_kill_the_send_loop() {
         .send(frame.clone())
         .await
         .expect("a sends frame");
-    let got = timeout(Duration::from_secs(5), b_audio.recv())
-        .await
-        .expect("answerer's audio must still arrive")
-        .expect("channel open");
+    let mut b_audio = b.take_incoming_audio("aaa").expect("b audio channel");
+    let got = timeout(Duration::from_secs(5), async {
+        loop {
+            match b_audio.recv().await {
+                Some(f) if f.data == frame.data => break f,
+                Some(_) => continue, // early frame still flushing
+                None => panic!("audio channel closed before marker frame arrived"),
+            }
+        }
+    })
+    .await
+    .expect("answerer's marker frame must arrive within 5s");
     assert_eq!(got.data, frame.data);
 
     early_writer.abort();
