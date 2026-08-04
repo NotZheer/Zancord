@@ -1,0 +1,1621 @@
+:root {
+  /* Discord-like dark palette: neutral charcoal surfaces, one accent
+     (blurple) for identity/focus, semantic red/green/amber for state. */
+  --bg-primary: #1e1f22;
+  --bg-secondary: #2b2d31;
+  --bg-card: #232428;
+  --bg-glass: rgba(30, 31, 34, 0.92);
+  --text-main: #f2f3f5;
+  --text-muted: #949ba4;
+  --accent-primary: #5865f2;
+  --accent-primary-strong: #4752c4;
+  --accent-green: #23a55a;
+  --accent-red: #f23f42;
+  --accent-red-strong: #da3238;
+  --accent-amber: #f0b232;
+  --border-glass: rgba(255, 255, 255, 0.06);
+  --border-active: rgba(255, 255, 255, 0.16);
+  --font-main: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 20px;
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --z-nav: 100;
+  --z-dock: 100;
+  --z-sidebar: 200;
+  --z-chat: 200;
+  --z-toast: 300;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-main);
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  overflow: hidden;
+  overflow-x: clip;
+  height: 100vh;
+  width: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* -------------------------------------------------------------------------
+ * 1. Top navigation — fully transparent, minimal, icon-only. Auto-fades on
+ *    inactivity so the call stage reads as the whole screen (Discord's
+ *    fullscreen voice view has no persistent chrome either).
+ * ------------------------------------------------------------------------- */
+.top-nav {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: var(--z-nav);
+  background: transparent;
+  transition: transform 350ms var(--ease-spring), opacity 350ms ease;
+}
+
+body.user-inactive .top-nav {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tailscale-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--accent-green);
+  background: rgba(35, 165, 90, 0.12);
+  border: 1px solid rgba(35, 165, 90, 0.28);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-glass);
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  cursor: pointer;
+  position: relative;
+  transition: background 150ms var(--ease-spring), border-color 150ms var(--ease-spring);
+}
+
+.btn-icon:hover,
+.btn-icon:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-active);
+}
+
+.btn-invite {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  color: #ffffff;
+  font-family: var(--font-main);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 150ms var(--ease-spring);
+}
+
+.btn-invite:hover,
+.btn-invite:focus-visible {
+  background: var(--accent-primary-strong);
+  border-color: var(--accent-primary-strong);
+}
+
+/* -------------------------------------------------------------------------
+ * 2. Call stage & gallery grid. Cell size is computed in UIRenderer
+ *    (--gallery-columns / --gallery-cell-width / --gallery-cell-height) so
+ *    every tile is an exact 16:9 rectangle that reflows to fill the window,
+ *    instead of being stretched by a CSS grid's row height.
+ * ------------------------------------------------------------------------- */
+.call-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 5rem 1.5rem 7.5rem;
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.call-grid {
+  display: grid;
+  width: min(100%, 100rem);
+  max-width: 100rem;
+  height: 100%;
+  min-width: 0;
+  gap: 1rem;
+  grid-template-columns: repeat(var(--gallery-columns, 1), var(--gallery-cell-width, minmax(0, 1fr)));
+  grid-auto-rows: var(--gallery-cell-height, minmax(0, 1fr));
+  align-content: center;
+  justify-content: center;
+  transition: gap 200ms var(--ease-spring);
+}
+
+/* Inactivity auto-fade */
+body.user-inactive .top-nav,
+body.user-inactive .dock-container {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dock-container {
+  transition: opacity 300ms ease, transform 350ms var(--ease-spring);
+}
+
+/* -------------------------------------------------------------------------
+ * 3. Peer tiles — flat Discord-style cards. Media is the entire visual
+ *    weight; overlay chrome (name, mic, connection) is small and quiet.
+ * ------------------------------------------------------------------------- */
+.peer-card {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: border-color 150ms var(--ease-spring);
+}
+
+.peer-card:hover {
+  border-color: var(--border-active);
+}
+
+.peer-card:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.peer-card.is-landscape {
+  justify-self: stretch;
+}
+
+.peer-card video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  background: #000000;
+  display: block;
+}
+
+.peer-card.local-card video {
+  transform: scaleX(-1);
+}
+
+.peer-card.local-card[data-peer-id*="screen"] video {
+  transform: scaleX(1); /* Never mirror a screen-share preview */
+}
+
+.peer-card[data-peer-id*="screen"] video {
+  object-fit: contain;
+  background: #000000;
+}
+
+/* Camera-off placeholder */
+.peer-placeholder {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-card);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.peer-card.cam-off .peer-placeholder {
+  display: flex;
+}
+
+.peer-avatar {
+  width: 30%;
+  min-width: 48px;
+  max-width: 96px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #35373c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* Name / status overlay — persistent, not hover-only (Discord always shows
+   the name pill; the mute icon only appears when actually muted). */
+.peer-overlay {
+  position: absolute;
+  bottom: 0.625rem;
+  left: 0.625rem;
+  right: 0.625rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.peer-name {
+  min-width: 0;
+  max-width: calc(100% - 2.5rem);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-main);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peer-status {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 0 0 auto;
+}
+
+.mic-badge,
+.connection-dot,
+.stream-muted-badge {
+  display: none;
+}
+
+.mic-badge.muted,
+.stream-muted-badge,
+.connection-dot.connecting,
+.connection-dot.failed {
+  display: inline-flex;
+}
+
+.stream-muted-badge {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  background: var(--accent-red);
+  color: #ffffff;
+}
+
+.peer-card:not(.stream-muted) .stream-muted-badge {
+  display: none;
+}
+
+.mic-badge {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-main);
+}
+
+.mic-badge.muted {
+  background: var(--accent-red);
+  color: #ffffff;
+}
+
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.connection-dot.connecting {
+  background: var(--accent-amber);
+}
+
+.connection-dot.failed {
+  background: var(--accent-red);
+}
+
+/* Speaking indicator — a flat green ring around the tile, matching
+   Discord's talking indicator (on/off, not volume-scaled). */
+.audio-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  pointer-events: none;
+  z-index: 4;
+  box-shadow: inset 0 0 0 0 var(--accent-green);
+  transition: box-shadow 100ms ease;
+}
+
+.peer-card.speaking .audio-ring {
+  box-shadow: inset 0 0 0 3px var(--accent-green);
+}
+
+/* -------------------------------------------------------------------------
+ * 4. Pinned / focused tile.
+ *    - A pinned CAMERA fits as large as possible at its own aspect ratio,
+ *      centered, no drag/resize (Discord doesn't let you reframe a pin).
+ *    - A pinned SCREEN SHARE fills almost the whole stage at its native
+ *      ratio via object-fit: contain.
+ * ------------------------------------------------------------------------- */
+.call-grid.has-spotlight {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+.call-grid.has-spotlight .peer-card.spotlight {
+  position: absolute;
+  inset: 0.75rem;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 1;
+}
+
+.call-grid.has-spotlight .peer-card.spotlight:not([data-peer-id*="screen"]) {
+  margin: auto;
+  aspect-ratio: 16 / 9;
+  max-width: calc(100% - 1.5rem);
+  max-height: calc(100% - 1.5rem);
+}
+
+.call-grid.has-spotlight .peer-card.spotlight.is-portrait:not([data-peer-id*="screen"]) {
+  aspect-ratio: 9 / 16;
+}
+
+.call-grid.has-spotlight .peer-card.spotlight video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000000;
+}
+
+.call-grid.has-spotlight .peer-card.spotlight.is-portrait:not([data-peer-id*="screen"]) video,
+.call-grid.has-spotlight .peer-card.spotlight[data-peer-id*="screen"] video {
+  object-fit: contain;
+}
+
+/* -------------------------------------------------------------------------
+ * 5. Camera strip — Discord-style fixed thumbnail row/column while a
+ *    CAMERA is pinned. No drag, no resize; only the layout toggle applies.
+ * ------------------------------------------------------------------------- */
+.camera-strip {
+  position: absolute;
+  bottom: 5.75rem;
+  left: 50%;
+  z-index: 20;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  max-width: calc(100% - 2rem);
+  padding: 0.5rem;
+  gap: 0.5rem;
+  transform: translateX(-50%);
+  overflow-x: auto;
+  background: rgba(20, 20, 23, 0.92);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Fixed-thumbnail sizing applies only outside pip-mode so it can never
+   override the PiP bubble dimensions (--pip-width / aspect-ratio) that
+   screen-share drag/resize relies on — even for portrait tiles in
+   vertical strip orientation. */
+.camera-strip:not(.pip-mode) .peer-card {
+  flex: 0 0 auto;
+  width: 10rem;
+  height: 5.625rem;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.camera-strip:not(.pip-mode) .peer-card.is-portrait {
+  width: 5.125rem;
+  height: 5.625rem;
+}
+
+.camera-strip .peer-overlay {
+  right: 0.5rem;
+  bottom: 0.5rem;
+  left: 0.5rem;
+}
+
+.camera-strip .peer-name {
+  max-width: calc(100% - 1.75rem);
+  padding: 0.1875rem 0.375rem;
+  font-size: 0.7rem;
+}
+
+.camera-strip .mic-badge.muted,
+.camera-strip .stream-muted-badge {
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: 0.6rem;
+}
+
+/* -------------------------------------------------------------------------
+ * 6. Screen-share PiP camera bubbles. Only active while cameraStrip has
+ *    .pip-mode — i.e. only while a SCREEN SHARE is pinned. Each bubble is
+ *    individually positioned via --pip-left/--pip-top/--pip-width, set by
+ *    UIRenderer, and can be freely dragged/resized.
+ * ------------------------------------------------------------------------- */
+.camera-strip.pip-mode {
+  inset: 0;
+  transform: none;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  gap: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.camera-strip.pip-mode .peer-card {
+  position: absolute;
+  /* P6: position via transform (compositor-only) so dragging never forces
+     a layout pass; width stays a layout property because resizing needs it. */
+  left: 0;
+  top: 0;
+  width: var(--pip-width, 13rem);
+  transform: translate3d(var(--pip-left, 1rem), var(--pip-top, 1rem), 0);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  pointer-events: auto;
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  z-index: 25;
+  cursor: grab;
+  transition: border-color 150ms var(--ease-spring), box-shadow 150ms var(--ease-spring);
+}
+
+.camera-strip.pip-mode .peer-card.is-portrait {
+  aspect-ratio: 9 / 16;
+}
+
+.camera-strip.pip-mode .peer-card.pip-dragging {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary), 0 20px 44px rgba(0, 0, 0, 0.6);
+  cursor: grabbing;
+}
+
+.pip-move-handle,
+.pip-resize-handle {
+  display: none;
+}
+
+.camera-strip.pip-mode .peer-card .pip-move-handle {
+  display: inline-flex;
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 6;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.66);
+  color: #ffffff;
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms var(--ease-spring);
+}
+
+.camera-strip.pip-mode .peer-card .pip-move-handle:active {
+  cursor: grabbing;
+}
+
+.camera-strip.pip-mode .peer-card .pip-resize-handle {
+  display: block;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  border-right: 3px solid var(--accent-primary);
+  border-bottom: 3px solid var(--accent-primary);
+  border-radius: 0 0 var(--radius-md) 0;
+  background: transparent;
+  cursor: nwse-resize;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms var(--ease-spring);
+}
+
+.camera-strip.pip-mode .peer-card:hover .pip-move-handle,
+.camera-strip.pip-mode .peer-card:focus-within .pip-move-handle,
+.camera-strip.pip-mode .peer-card:hover .pip-resize-handle,
+.camera-strip.pip-mode .peer-card:focus-within .pip-resize-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .camera-strip.pip-mode .peer-card .pip-move-handle,
+  .camera-strip.pip-mode .peer-card .pip-resize-handle {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * 7. Per-stream audio popover (right-click a remote tile — camera OR
+ *    screen share).
+ * ------------------------------------------------------------------------- */
+.stream-audio-popover {
+  position: fixed;
+  z-index: calc(var(--z-toast) + 1);
+  width: 16.5rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.58);
+}
+
+.stream-audio-popover[hidden] {
+  display: none;
+}
+
+.stream-audio-popover-header,
+.stream-audio-volume-label {
+  display: flex;
+  align-items: center;
+}
+
+.stream-audio-popover-header {
+  justify-content: space-between;
+}
+
+.stream-audio-label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.stream-audio-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.stream-audio-close:hover,
+.stream-audio-close:focus-visible {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.stream-audio-name {
+  margin: 0.5rem 0 0.75rem;
+  overflow: hidden;
+  color: var(--text-main);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream-audio-mute {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stream-audio-mute[aria-pressed="true"] {
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+.stream-audio-mute:hover,
+.stream-audio-mute:focus-visible {
+  border-color: var(--accent-primary);
+  background: rgba(88, 101, 242, 0.14);
+}
+
+.stream-audio-volume-label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.375rem 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.stream-audio-volume-output {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.stream-audio-volume {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+/* -------------------------------------------------------------------------
+ * 8. Bottom control dock — flat, icon-only circular buttons like Discord's
+ *    in-call bar. Text labels remain in the DOM for screen readers but are
+ *    visually hidden; hover/focus states swap in the accessible title.
+ * ------------------------------------------------------------------------- */
+.dock-container {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-dock);
+  transition: transform 350ms var(--ease-spring), opacity 350ms ease;
+}
+
+body.user-inactive .dock-container {
+  transform: translate(-50%, 150%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.control-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(17, 18, 20, 0.92);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+.dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  color: var(--text-main);
+  font-family: var(--font-main);
+  cursor: pointer;
+  transition: background 150ms var(--ease-spring), color 150ms var(--ease-spring);
+}
+
+.dock-btn span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.dock-btn i {
+  font-size: 1.1rem;
+}
+
+.dock-btn:hover,
+.dock-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.dock-btn.off {
+  background: rgba(242, 63, 66, 0.16);
+  color: var(--accent-red);
+}
+
+.dock-btn.active {
+  background: rgba(35, 165, 90, 0.18);
+  color: var(--accent-green);
+}
+
+.dock-btn.btn-leave {
+  background: var(--accent-red);
+  color: #ffffff;
+  margin-left: 4px;
+}
+
+.dock-btn.btn-leave:hover,
+.dock-btn.btn-leave:focus-visible {
+  background: var(--accent-red-strong);
+}
+
+/* -------------------------------------------------------------------------
+ * 9. Settings sidebar
+ * ------------------------------------------------------------------------- */
+.settings-sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-glass);
+  z-index: var(--z-sidebar);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 300ms var(--ease-spring);
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.5);
+}
+
+.settings-sidebar.open {
+  transform: translateX(0);
+}
+
+.sidebar-header {
+  height: 64px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent-primary);
+}
+
+.sidebar-brand h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-main);
+}
+
+.sidebar-brand h2 span {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.sidebar-body {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+input[type="text"],
+select {
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-family: var(--font-main);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 200ms ease;
+}
+
+input[type="text"]:focus,
+select:focus {
+  border-color: var(--accent-primary);
+}
+
+.toggle-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: rgba(255, 255, 255, 0.15);
+  transition: 200ms;
+  border-radius: 24px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 200ms;
+  border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+  background-color: var(--accent-green);
+}
+
+input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+}
+
+.slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.db-readout {
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+}
+
+.range-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+}
+
+.range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+}
+
+.sidebar-status {
+  margin-top: auto;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+}
+
+.status-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.status-value {
+  font-family: var(--font-mono);
+  color: var(--accent-green);
+}
+
+/* Hotkey bindings */
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+.hotkey-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.hotkey-btn {
+  min-width: 80px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  transition: all 200ms var(--ease-spring);
+  letter-spacing: 0.03em;
+}
+
+.hotkey-btn:hover {
+  border-color: var(--accent-primary);
+  background: rgba(88, 101, 242, 0.1);
+}
+
+.hotkey-btn.recording {
+  border-color: var(--accent-warning);
+  background: rgba(245, 166, 35, 0.12);
+  color: var(--accent-warning);
+  animation: hotkey-pulse 1s ease-in-out infinite;
+}
+
+@keyframes hotkey-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(245, 166, 35, 0); }
+}
+
+/* -------------------------------------------------------------------------
+ * 10. Chat drawer
+ * ------------------------------------------------------------------------- */
+.chat-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-glass);
+  z-index: var(--z-chat);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 300ms var(--ease-spring);
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.5);
+}
+
+.chat-drawer.open {
+  transform: translateX(0);
+}
+
+.chat-header {
+  height: 64px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.chat-header h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-primary);
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.toggle-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.chat-system-msg {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 12px 0;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  position: relative;
+  word-break: break-word;
+}
+
+.chat-message.local {
+  align-self: flex-end;
+  background: rgba(88, 101, 242, 0.22);
+  border: 1px solid rgba(88, 101, 242, 0.4);
+  border-bottom-right-radius: 4px;
+}
+
+.chat-message.remote {
+  align-self: flex-start;
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-bottom-left-radius: 4px;
+}
+
+.chat-sender {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+  margin-bottom: 2px;
+}
+
+.chat-message.remote .chat-sender {
+  color: var(--accent-green);
+}
+
+.chat-text {
+  color: var(--text-main);
+}
+
+.chat-time {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  align-self: flex-end;
+  margin-top: 4px;
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-delete-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-message:hover .chat-delete-btn {
+  opacity: 1;
+}
+
+.chat-delete-btn:hover {
+  background: rgba(237, 66, 69, 0.25);
+  color: var(--accent-danger);
+}
+
+@keyframes chat-msg-remove {
+  to {
+    opacity: 0;
+    transform: translateX(20px) scale(0.95);
+    max-height: 0;
+    padding: 0;
+    margin: 0;
+  }
+}
+
+.chat-message-removing {
+  animation: chat-msg-remove 250ms ease forwards;
+  overflow: hidden;
+}
+
+#btn-clear-chat {
+  color: var(--text-muted);
+  transition: color 200ms ease;
+}
+
+#btn-clear-chat:hover {
+  color: var(--accent-danger);
+}
+
+.chat-form {
+  padding: 16px;
+  border-top: 1px solid var(--border-glass);
+  display: flex;
+  gap: 8px;
+  background: var(--bg-secondary);
+}
+
+.chat-form input {
+  flex: 1;
+}
+
+.chat-send-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-primary);
+  border: none;
+  color: #ffffff;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 150ms var(--ease-spring);
+}
+
+.chat-send-btn:hover,
+.chat-send-btn:focus-visible {
+  background: var(--accent-primary-strong);
+}
+
+/* -------------------------------------------------------------------------
+ * 11. Toasts & unread badge
+ * ------------------------------------------------------------------------- */
+.toast-container {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  min-width: 280px;
+  max-width: 400px;
+  padding: 12px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--text-main);
+  animation: toastIn 300ms var(--ease-spring) forwards;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast.dismissing {
+  animation: toastOut 300ms var(--ease-spring) forwards;
+}
+
+@keyframes toastOut {
+  to {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+}
+
+.toast-info { border-left: 4px solid var(--accent-primary); }
+.toast-info i { color: var(--accent-primary); }
+
+.toast-success { border-left: 4px solid var(--accent-green); }
+.toast-success i { color: var(--accent-green); }
+
+.toast-warning { border-left: 4px solid var(--accent-amber); }
+.toast-warning i { color: var(--accent-amber); }
+
+.toast-error { border-left: 4px solid var(--accent-red); }
+.toast-error i { color: var(--accent-red); }
+
+.unread-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  background: var(--accent-red);
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--bg-primary);
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* -------------------------------------------------------------------------
+ * 12. Responsive
+ * ------------------------------------------------------------------------- */
+@media (max-width: 1024px) {
+  .settings-sidebar,
+  .chat-drawer {
+    width: 100vw;
+  }
+
+  .call-stage {
+    padding: 4.5rem 1rem 6.75rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .top-nav {
+    height: 3.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .tailscale-badge {
+    padding: 0.375rem;
+  }
+
+  .tailscale-badge span,
+  .btn-invite span {
+    display: none;
+  }
+
+  .nav-actions {
+    gap: 0.375rem;
+  }
+
+  .btn-icon,
+  .btn-invite {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .call-stage {
+    padding: 4rem 0.75rem 6.5rem;
+  }
+
+  .call-grid {
+    gap: 0.75rem;
+  }
+
+  .camera-strip {
+    bottom: 5.75rem;
+    max-width: calc(100% - 1rem);
+  }
+
+  .camera-strip .peer-card {
+    width: 7.5rem;
+    height: 4.25rem;
+  }
+
+  .camera-strip .peer-card.is-portrait {
+    width: 3.875rem;
+    height: 4.25rem;
+  }
+
+
+  .call-grid.has-spotlight .peer-card.spotlight {
+    max-width: calc(100% - 1rem);
+  }
+
+  .stream-audio-popover {
+    width: min(16.5rem, calc(100vw - 1rem));
+  }
+
+  .control-dock {
+    gap: 4px;
+    padding: 6px;
+  }
+
+  .dock-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .dock-btn i {
+    font-size: 0.95rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .peer-card,
+  .camera-strip.pip-mode .peer-card {
+    transition: none;
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * 9. Screen share quality modal — shown right after the browser source
+ *    picker so the user can cap resolution/FPS before peers receive it
+ *    (PERF-AUDIT P1).
+ * ------------------------------------------------------------------------- */
+.share-quality-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-toast) + 2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px);
+}
+
+.share-quality-overlay[hidden] {
+  display: none;
+}
+
+.share-quality-modal {
+  width: min(26rem, 100%);
+  padding: 1.25rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+.share-quality-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.share-quality-header h3 i {
+  color: var(--accent-primary);
+}
+
+.share-quality-sub {
+  margin-top: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.share-quality-preview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin: 1rem 0;
+  border-radius: var(--radius-md);
+  background: #000000;
+  object-fit: contain;
+  border: 1px solid var(--border-glass);
+}
+
+.share-quality-audio-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: -0.25rem 0 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(240, 178, 50, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(240, 178, 50, 0.1);
+  color: var(--accent-amber);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.share-quality-audio-hint[hidden] {
+  display: none;
+}
+
+.share-quality-audio-hint i {
+  margin-top: 0.15rem;
+}
+
+.share-quality-fields {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.share-quality-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.share-quality-field select {
+  width: 100%;
+  padding: 0.6rem 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.share-quality-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+.share-quality-actions button {
+  min-height: 2.5rem;
+  padding: 0 1.25rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.share-quality-cancel {
+  background: transparent;
+  border-color: var(--border-glass) !important;
+  color: var(--text-main);
+}
+
+.share-quality-cancel:hover {
+  border-color: var(--border-active) !important;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.share-quality-confirm {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+.share-quality-confirm:hover {
+  background: var(--accent-primary-strong);
+}
+
+.share-quality-confirm:focus-visible,
+.share-quality-cancel:focus-visible {
+  outline: 2px solid var(--text-main);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .share-quality-fields {
+    flex-direction: column;
+  }
+}

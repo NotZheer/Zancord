@@ -1,4 +1,9 @@
 node_modules
-src-tauri/target
+dist
+coverage
 .DS_Store
 *.log
+
+# TLS keys — NEVER commit these
+key.pem
+cert.pem

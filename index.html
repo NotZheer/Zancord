@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZanCord | P2P 1080p Stream & Voice</title>
+  <meta name="description" content="Zero-telemetry P2P encrypted video calls, voice chat, and screen sharing over Tailscale.">
+  
+  <meta name="theme-color" content="#050505">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ZanCord">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <link rel="stylesheet" href="/src/styles/style.css">
+</head>
+<body>
+  <div id="app">
+    
+    <!-- Top Navigation Header -->
+    <header class="top-nav" id="top-nav">
+      <div class="nav-brand">
+        <div class="tailscale-badge" id="tailscale-badge">
+          <i class="fa-solid fa-network-wired"></i>
+          <span id="tailscale-ip-display">Tailscale: Detecting...</span>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <button id="btn-toggle-chat" class="btn-icon" title="Chat"><i class="fa-solid fa-comments"></i><span id="chat-unread-badge" class="unread-badge hidden"></span></button>
+        <button id="btn-toggle-settings" class="btn-icon" title="Settings"><i class="fa-solid fa-sliders"></i></button>
+        <button id="btn-fullscreen" class="btn-icon" title="Fullscreen"><i class="fa-solid fa-expand"></i></button>
+        <button id="btn-copy-invite" class="btn-invite"><i class="fa-solid fa-link"></i> <span>Copy Link</span></button>
+      </div>
+    </header>
+
+    <!-- Call Grid Stage -->
+    <main class="call-stage" id="call-stage">
+      <div class="call-grid" id="call-grid">
+        <!-- Peer cards dynamically inserted here by UIRenderer -->
+      </div>
+    </main>
+
+    <!-- Bottom Control Dock -->
+    <div class="dock-container" id="dock-container">
+      <div class="control-dock">
+        <button id="btn-toggle-mic" class="dock-btn" title="Toggle Microphone">
+          <i class="fa-solid fa-microphone"></i><span>Mic</span>
+        </button>
+        <button id="btn-toggle-cam" class="dock-btn" title="Toggle Camera">
+          <i class="fa-solid fa-video"></i><span>Camera</span>
+        </button>
+        <button id="btn-toggle-screen" class="dock-btn btn-screen" title="Share Screen">
+          <i class="fa-solid fa-desktop"></i><span>Screen</span>
+        </button>
+        <button id="btn-toggle-deafen" class="dock-btn" title="Deafen">
+          <i class="fa-solid fa-headphones"></i><span>Deafen</span>
+        </button>
+        <button id="btn-leave" class="dock-btn btn-leave" title="Leave Call">
+          <i class="fa-solid fa-phone-slash"></i><span>Leave</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Settings Sidebar -->
+    <aside class="settings-sidebar" id="settings-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand"><i class="fa-solid fa-bolt"></i><h2>ZANCORD <span>SETTINGS</span></h2></div>
+        <button id="btn-close-settings" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="sidebar-body">
+        <div class="form-group">
+          <label for="input-display-name"><i class="fa-solid fa-user"></i> DISPLAY NAME</label>
+          <input type="text" id="input-display-name" placeholder="Enter name..." maxlength="24" value="User">
+        </div>
+        <div class="form-group">
+          <label for="select-mic-device"><i class="fa-solid fa-microphone"></i> MICROPHONE</label>
+          <select id="select-mic-device"><option value="">Default Microphone</option></select>
+        </div>
+        <div class="form-group">
+          <label for="select-cam-device"><i class="fa-solid fa-video"></i> CAMERA</label>
+          <select id="select-cam-device"><option value="">Default Camera</option></select>
+        </div>
+        <div class="form-group">
+          <label for="select-speaker-device"><i class="fa-solid fa-headphones"></i> SPEAKERS</label>
+          <select id="select-speaker-device"><option value="">Default Speakers</option></select>
+        </div>
+        <div class="toggle-group">
+          <div class="toggle-row">
+            <span><i class="fa-solid fa-wand-magic-sparkles"></i> NOISE GATE & FILTER</span>
+            <label class="toggle-switch"><input type="checkbox" id="toggle-noise-suppression" checked><span class="toggle-slider"></span></label>
+          </div>
+          <div class="slider-group">
+            <div class="slider-header"><span>NOISE GATE THRESHOLD</span><span id="sensitivity-db-value" class="db-readout">-45 dB</span></div>
+            <input type="range" id="input-noise-sensitivity" min="-70" max="-10" value="-45" step="1" class="range-slider">
+          </div>
+        </div>
+        <div class="toggle-group">
+          <div class="toggle-row">
+            <span><i class="fa-solid fa-volume-high"></i> SHARE SCREEN AUDIO</span>
+            <label class="toggle-switch"><input type="checkbox" id="toggle-share-audio"><span class="toggle-slider"></span></label>
+          </div>
+          <p class="toggle-desc">Screen audio works in Chrome, Edge &amp; Firefox — Safari can't capture it.</p>
+        </div>
+        <div class="toggle-group">
+          <div class="toggle-row hotkey-section-header">
+            <span><i class="fa-solid fa-keyboard"></i> HOTKEYS</span>
+          </div>
+          <div class="hotkey-row">
+            <span class="hotkey-label">Toggle Mic</span>
+            <button class="hotkey-btn" id="hotkey-mic" data-action="toggleMic">None</button>
+          </div>
+          <div class="hotkey-row">
+            <span class="hotkey-label">Toggle Camera</span>
+            <button class="hotkey-btn" id="hotkey-cam" data-action="toggleCam">None</button>
+          </div>
+          <div class="hotkey-row">
+            <span class="hotkey-label">Toggle Deafen</span>
+            <button class="hotkey-btn" id="hotkey-deafen" data-action="toggleDeafen">None</button>
+          </div>
+        </div>
+        <div class="sidebar-status">
+          <div class="status-row"><span class="status-label">NETWORK</span><span class="status-value"><i class="fa-solid fa-lock"></i> TAILSCALE P2P</span></div>
+          <div class="status-row"><span class="status-label">WEBCAM</span><span class="status-value">720P @ 30 FPS</span></div>
+          <div class="status-row"><span class="status-label">MESH</span><span class="status-value">FULL MESH (≤6)</span></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Chat Drawer (U1) -->
+    <aside class="chat-drawer closed" id="chat-drawer">
+      <div class="chat-header">
+        <h3><i class="fa-solid fa-lock"></i> ROOM CHAT</h3>
+        <div class="chat-header-actions">
+          <button id="btn-clear-chat" class="btn-icon" title="Clear all messages"><i class="fa-solid fa-trash-can"></i></button>
+          <button id="btn-close-chat" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-system-msg">Zero telemetry. Messages stay between room peers only.</div>
+      </div>
+      <form id="chat-form" class="chat-form">
+        <input type="text" id="chat-input" placeholder="Type message..." autocomplete="off" maxlength="1000">
+        <button type="submit" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+      </form>
+    </aside>
+
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
