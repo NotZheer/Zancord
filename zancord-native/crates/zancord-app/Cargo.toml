@@ -1,0 +1,20 @@
+[package]
+name = "zancord-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "zancord-app"
+path = "src/main.rs"
+
+[dependencies]
+zancord-protocol = { workspace = true }
+zancord-signaling-client = { path = "../zancord-signaling-client" }
+zancord-audio = { path = "../zancord-audio" }
+zancord-transport = { path = "../zancord-transport" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

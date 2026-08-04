@@ -1,0 +1,14 @@
+# Platform-specific build configuration.
+#
+# macOS: media capture (ScreenCaptureKit, CoreAudio) requires a minimum
+# deployment target of 10.15; 13.0+ enables system-audio capture via
+# SCStreamConfiguration::capturesAudio.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
+
+[build]
+# Keep incremental artifacts out of per-crate target dirs; single shared target.
+target-dir = "target"

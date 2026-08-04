@@ -1,0 +1,18 @@
+[package]
+name = "zancord-signaling-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zancord-protocol = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = "0.24"
+futures-util = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+zancord-signaling-server = { path = "../zancord-signaling-server" }

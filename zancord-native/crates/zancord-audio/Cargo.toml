@@ -1,0 +1,20 @@
+[package]
+name = "zancord-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zancord-protocol = { workspace = true }
+tokio = { workspace = true }
+cpal = "0.15"
+opus = "0.3"
+rubato = "0.15"
+rtrb = "0.3"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+rtrb = "0.3"
+tokio = { workspace = true }

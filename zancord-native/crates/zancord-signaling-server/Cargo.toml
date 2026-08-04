@@ -1,0 +1,22 @@
+[package]
+name = "zancord-signaling-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zancord-protocol = { workspace = true }
+tokio = { workspace = true }
+axum = { version = "0.7", features = ["ws"] }
+axum-server = { version = "0.7.3", features = ["tls-rustls"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
+futures-util = { workspace = true }
