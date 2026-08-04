@@ -44,6 +44,7 @@ pub struct CaptureResampler {
     inner: SincFixedIn<f32>,
     channels: usize,
     mono_in: Vec<f32>,
+    mono_scratch: Vec<f32>,
     pending: Vec<f32>,
     out_buf: Vec<f32>,
 }
@@ -64,15 +65,24 @@ impl CaptureResampler {
             inner,
             channels,
             mono_in: Vec::with_capacity(FRAME_SIZE * 2),
+            mono_scratch: Vec::with_capacity(FRAME_SIZE * 2),
             pending: Vec::with_capacity(FRAME_SIZE * 2),
             out_buf: vec![0.0; out_len],
         })
     }
 
-    /// Feed interleaved device-rate samples: downmix to mono, then resample in
-    /// 960-sample chunks.
+    /// Feed interleaved device-rate samples: downmix to mono, accumulate in the
+    /// input buffer, then resample complete 960-sample chunks.
+    ///
+    /// `mono_in` must ACCUMULATE across calls (the device delivers far fewer
+    /// than 960 samples per callback); never reset it per push.
     pub fn push(&mut self, interleaved: &[f32]) -> Result<()> {
-        downmix_to_mono_into(interleaved, self.channels, &mut self.mono_in);
+        if self.channels <= 1 {
+            self.mono_in.extend_from_slice(interleaved);
+        } else {
+            downmix_to_mono_into(interleaved, self.channels, &mut self.mono_scratch);
+            self.mono_in.extend_from_slice(&self.mono_scratch);
+        }
         while self.mono_in.len() >= FRAME_SIZE {
             let input = [&self.mono_in[..FRAME_SIZE]];
             let mut output = [self.out_buf.as_mut_slice()];

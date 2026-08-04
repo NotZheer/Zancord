@@ -13,6 +13,27 @@ fn sine(freq: f32, sample_rate: u32, n: usize, amplitude: f32) -> Vec<f32> {
 }
 
 #[test]
+fn capture_24000_incremental_cadence() {
+    // The production pipeline feeds the capture resampler in device-callback
+    // sized chunks (480 samples = 20 ms at 24 kHz), one per tick. 48,000 input
+    // samples = 1 s at 24 kHz = 2 s at 48 kHz = 100 frames of 960 samples
+    // (rubato's filter latency costs the first few samples).
+    let mut resampler = CaptureResampler::new(24_000, 1).unwrap();
+    let mut frames = 0usize;
+    let mut out = vec![0.0; FRAME_SIZE];
+    for _ in 0..100 {
+        resampler.push(&[0.5; 480]).unwrap();
+        while resampler.take_frame(&mut out) {
+            frames += 1;
+        }
+    }
+    assert!(
+        (95..=100).contains(&frames),
+        "expected ~100 frames from 1s at 24kHz, got {frames}"
+    );
+}
+
+#[test]
 fn capture_44100_to_48000_sample_count() {
     let mut resampler = CaptureResampler::new(44_100, 1).unwrap();
     let input = sine(440.0, 44_100, 44_100 * 2, 0.5); // 2 s mono

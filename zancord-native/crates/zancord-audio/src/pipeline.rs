@@ -247,10 +247,58 @@ impl AudioPipeline {
     }
 
     fn run_loop(&mut self) {
+        // Per-second activity accounting so a voice call can be verified from
+        // logs alone: `sent` proves mic -> Opus -> network; `received`/`decoded`
+        // prove network -> Opus -> speakers.
+        let mut last_report = Instant::now();
+        let mut sent = 0u64;
+        let mut received = 0u64;
+        let mut decoded = 0u64;
+        let mut plc = 0u64;
+        let mut dropped = 0u64;
+
         while !self.stopped {
             let started = Instant::now();
-            if let Err(error) = self.tick() {
-                tracing::error!(target: "zancord_audio", %error, "audio tick failed");
+            match self.tick() {
+                Ok(summary) => {
+                    sent += summary.sent_frames;
+                    received += summary.received_frames;
+                    decoded += summary.decoded_frames;
+                    plc += summary.plc_frames;
+                    dropped += summary.dropped_peer_frames + summary.tx_dropped;
+                }
+                Err(error) => {
+                    tracing::error!(target: "zancord_audio", %error, "audio tick failed");
+                }
+            }
+            if last_report.elapsed() >= Duration::from_secs(1) {
+                let (overflow, ring_slots) = match &mut self.capture {
+                    Some(c) => (c.overflow_count(), c.consumer().slots()),
+                    None => (0, 0),
+                };
+                let (input_buffered, pending) = match &self.capture_resampler {
+                    Some(r) => (r.input_buffered(), r.pending_len()),
+                    None => (0, 0),
+                };
+                tracing::info!(
+                    target: "zancord_audio",
+                    sent,
+                    received,
+                    decoded,
+                    plc,
+                    dropped,
+                    overflow,
+                    ring_slots,
+                    input_buffered,
+                    pending,
+                    "audio activity (last 1s): sent=mic->net received=net->decoder decoded=decoder->speakers"
+                );
+                sent = 0;
+                received = 0;
+                decoded = 0;
+                plc = 0;
+                dropped = 0;
+                last_report = Instant::now();
             }
             if self.rx.is_closed() {
                 break;
