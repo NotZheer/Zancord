@@ -1,0 +1,36 @@
+// Zancord design system (Phase 4.1): dark glassmorphism palette, typography,
+// spacing, and radius tokens. Every component reads from this global so the
+// whole UI re-themes from one place.
+
+export global Theme {
+    // Colors
+    out property <color> bg-primary: #0f0f17;
+    out property <color> bg-secondary: #1a1a2e;
+    out property <color> bg-surface: #16213e80; // semi-transparent for glass
+    out property <color> accent: #7c3aed;
+    out property <color> accent-hover: #8b5cf6;
+    out property <color> text-primary: #e2e8f0;
+    out property <color> text-secondary: #94a3b8;
+    out property <color> success: #22c55e;
+    out property <color> warning: #f59e0b;
+    out property <color> error: #ef4444;
+    out property <color> info: #3b82f6;
+    out property <color> border: #ffffff18;
+
+    // Typography
+    out property <length> font-size-sm: 12px;
+    out property <length> font-size-md: 14px;
+    out property <length> font-size-lg: 18px;
+    out property <length> font-size-xl: 24px;
+
+    // Spacing
+    out property <length> spacing-xs: 4px;
+    out property <length> spacing-sm: 8px;
+    out property <length> spacing-md: 16px;
+    out property <length> spacing-lg: 24px;
+
+    // Borders
+    out property <length> radius-sm: 8px;
+    out property <length> radius-md: 12px;
+    out property <length> radius-lg: 16px;
+}

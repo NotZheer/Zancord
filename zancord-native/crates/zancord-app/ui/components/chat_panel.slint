@@ -1,0 +1,103 @@
+// Chat panel (Phase 4.5): message list with self/other alignment, timestamp,
+// and an input bar (Enter sends).
+
+import { Theme } from "../theme.slint";
+import { ListView } from "std-widgets.slint";
+import { ChatMessage } from "../types.slint";
+
+export component ChatPanel inherits Rectangle {
+    in property <[ChatMessage]> messages;
+    callback send_chat(string);
+
+    preferred-width: 320px;
+    background: Theme.bg-secondary;
+
+    HorizontalLayout {
+        // Left divider.
+        Rectangle {
+            width: 1px;
+            height: 100%;
+            background: Theme.border;
+        }
+        VerticalLayout {
+            padding: Theme.spacing-md;
+            spacing: Theme.spacing-sm;
+
+        Text {
+            text: "Chat";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-lg;
+        }
+
+        ListView {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            for m in root.messages: HorizontalLayout {
+                alignment: m.is_self ? end : start;
+                Rectangle {
+                    max-width: 260px;
+                    border-radius: Theme.radius-md;
+                    background: m.is_self ? Theme.accent : Theme.bg-surface;
+                    VerticalLayout {
+                        padding: Theme.spacing-sm;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            spacing: Theme.spacing-sm;
+                            Text {
+                                text: m.sender;
+                                color: m.is_self ? Theme.text-primary : Theme.text-secondary;
+                                font-size: Theme.font-size-sm;
+                            }
+                            Text {
+                                text: m.timestamp;
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-size-sm;
+                            }
+                        }
+                        Text {
+                            text: m.content;
+                            color: Theme.text-primary;
+                            font-size: Theme.font-size-md;
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.spacing-sm;
+            input := TextInput {
+                horizontal-stretch: 1;
+                color: Theme.text-primary;
+                accepted => {
+                    root.send_chat(self.text);
+                    self.text = "";
+                }
+            }
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: Theme.accent;
+                touch := TouchArea {
+                    clicked => {
+                        root.send_chat(input.text);
+                        input.text = "";
+                    }
+                    mouse-cursor: pointer;
+                }
+                Text {
+                    text: "➤";
+                    color: Theme.text-primary;
+                    font-size: Theme.font-size-lg;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                states [
+                    hover when touch.has-hover: { background: Theme.accent-hover; }
+                ]
+            }
+        }
+        }
+    }
+}

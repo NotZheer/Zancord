@@ -1,0 +1,100 @@
+// Control dock (Phase 4.4): horizontal bar of circular toggle buttons with
+// hover/pressed states and active highlighting.
+
+import { Theme } from "../theme.slint";
+
+component DockButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tooltip;
+    in property <bool> active;
+    in property <bool> danger;
+    callback clicked();
+
+    width: 56px;
+    height: 56px;
+    border-radius: 28px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: root.danger ? Theme.error : (root.active ? Theme.accent : Theme.bg-surface);
+    animate background { duration: 150ms; }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    Text {
+        text: root.icon;
+        font-size: 22px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    states [
+        hover when touch.has-hover && !touch.pressed: {
+            background: root.danger ? Theme.error : (root.active ? Theme.accent-hover : Theme.bg-secondary);
+        }
+        pressed when touch.pressed: {
+            background: root.active ? Theme.accent-hover : Theme.bg-secondary;
+        }
+    ]
+}
+
+export component ControlDock inherits Rectangle {
+    in property <bool> mic_enabled;
+    in property <bool> camera_enabled;
+    in property <bool> screen_sharing;
+    in property <bool> deafened;
+
+    callback toggle_mic();
+    callback toggle_camera();
+    callback toggle_screen_share();
+    callback toggle_deafen();
+    callback leave_room();
+
+    height: 88px;
+    border-radius: Theme.radius-lg;
+    background: Theme.bg-surface;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        Rectangle { horizontal-stretch: 1; }
+        HorizontalLayout {
+            spacing: Theme.spacing-md;
+            alignment: center;
+
+            DockButton {
+                icon: root.mic_enabled ? "🎤" : "🔇";
+                tooltip: "Toggle mic (Ctrl+M)";
+                active: root.mic_enabled;
+                clicked => { root.toggle_mic(); }
+            }
+            DockButton {
+                icon: root.camera_enabled ? "🎥" : "🚫";
+                tooltip: "Toggle camera (Ctrl+E)";
+                active: root.camera_enabled;
+                clicked => { root.toggle_camera(); }
+            }
+            DockButton {
+                icon: "🖥️";
+                tooltip: "Toggle screen share (Ctrl+Shift+S)";
+                active: root.screen_sharing;
+                clicked => { root.toggle_screen_share(); }
+            }
+            DockButton {
+                icon: root.deafened ? "🔕" : "🎧";
+                tooltip: "Toggle deafen (Ctrl+D)";
+                active: root.deafened;
+                clicked => { root.toggle_deafen(); }
+            }
+            DockButton {
+                icon: "📞";
+                tooltip: "Leave room";
+                danger: true;
+                clicked => { root.leave_room(); }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}

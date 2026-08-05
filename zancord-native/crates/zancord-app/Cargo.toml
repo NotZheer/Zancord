@@ -9,6 +9,10 @@ rust-version.workspace = true
 name = "zancord-app"
 path = "src/main.rs"
 
+[[bin]]
+name = "zancord-ui"
+path = "src/bin/ui.rs"
+
 [dependencies]
 zancord-protocol = { workspace = true }
 zancord-signaling-client = { path = "../zancord-signaling-client" }
@@ -18,3 +22,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+slint = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }

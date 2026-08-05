@@ -1,0 +1,25 @@
+// Shared data structures (Phase 4.2): model element types used by the main
+// window and its components.
+
+export struct PeerData {
+    id: string,
+    username: string,
+    initial: string,
+    frame: image,
+    is_speaking: bool,
+    is_muted: bool,
+    has_video: bool,
+    is_screen_share: bool,
+}
+
+export struct ChatMessage {
+    sender: string,
+    content: string,
+    timestamp: string,
+    is_self: bool,
+}
+
+export struct Toast {
+    text: string,
+    kind: string,
+}

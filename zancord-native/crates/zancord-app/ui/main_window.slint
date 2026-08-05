@@ -1,0 +1,227 @@
+// Main window (Phase 4.2): top bar, call grid, toggleable chat panel, control
+// dock, toast overlay, and global keyboard shortcuts (Phase 4.9).
+
+import { Theme } from "theme.slint";
+import { VideoTile } from "components/video_tile.slint";
+import { ControlDock } from "components/control_dock.slint";
+import { ChatPanel } from "components/chat_panel.slint";
+import { ToastCard } from "components/toast.slint";
+
+import { Theme } from "theme.slint";
+import { VideoTile } from "components/video_tile.slint";
+import { ControlDock } from "components/control_dock.slint";
+import { ChatPanel } from "components/chat_panel.slint";
+import { ToastCard } from "components/toast.slint";
+import { PeerData, ChatMessage, Toast } from "types.slint";
+
+export component MainWindow inherits Window {
+    title: "Zancord";
+    min-width: 960px;
+    min-height: 600px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+
+    // Remote peers (up to 6).
+    in property <[PeerData]> peers;
+    // Local state.
+    in property <image> local_video_frame;
+    in property <bool> local_has_video;
+    in property <bool> mic_enabled;
+    in property <bool> camera_enabled;
+    in property <bool> screen_sharing;
+    in property <bool> deafened;
+    in property <string> room_name;
+    in property <int> peer_count;
+    in-out property <bool> chat_visible: true;
+
+    // Chat + toasts.
+    in property <[ChatMessage]> chat_messages;
+    in property <[Toast]> toasts;
+
+    // Callbacks to Rust.
+    callback toggle_mic();
+    callback toggle_camera();
+    callback toggle_screen_share();
+    callback toggle_deafen();
+    callback leave_room();
+    callback send_chat(string);
+    callback copy_invite_link();
+    callback toggle_chat();
+
+    background: Theme.bg-primary;
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.bg-primary;
+
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            padding: Theme.spacing-md;
+            spacing: Theme.spacing-md;
+
+            // Top bar.
+            Rectangle {
+                height: 48px;
+                border-radius: Theme.radius-md;
+                background: Theme.bg-surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                HorizontalLayout {
+                    padding-left: Theme.spacing-md;
+                    padding-right: Theme.spacing-md;
+                    spacing: Theme.spacing-md;
+                    alignment: center;
+                    Text {
+                        text: "🏠 " + root.room_name;
+                        color: Theme.text-primary;
+                        font-size: Theme.font-size-lg;
+                    }
+                    Text {
+                        text: root.peer_count == 1 ? "1 peer" : root.peer_count + " peers";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-size-sm;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle {
+                        Text {
+                            text: "🔗 Copy link";
+                            color: Theme.text-secondary;
+                            font-size: Theme.font-size-sm;
+                        }
+                        touch := TouchArea {
+                            clicked => { root.copy_invite_link(); }
+                            mouse-cursor: pointer;
+                        }
+                        states [
+                            hover when touch.has-hover: { background: Theme.bg-secondary; }
+                        ]
+                    }
+                    Rectangle {
+                        Text {
+                            text: "💬";
+                            color: Theme.text-primary;
+                            font-size: Theme.font-size-lg;
+                        }
+                        chat_touch := TouchArea {
+                            clicked => { root.toggle_chat(); }
+                            mouse-cursor: pointer;
+                        }
+                        states [
+                            hover when chat_touch.has-hover: { background: Theme.bg-secondary; }
+                        ]
+                    }
+                }
+            }
+
+            // Call grid + chat.
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                spacing: Theme.spacing-md;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    border-radius: Theme.radius-lg;
+                    background: Theme.bg-secondary;
+                    clip: true;
+
+                    if root.peers.length == 0: VerticalLayout {
+                        width: 100%;
+                        height: 100%;
+                        alignment: center;
+                        Text {
+                            text: "Waiting for others to join…";
+                            color: Theme.text-secondary;
+                            font-size: Theme.font-size-lg;
+                        }
+                    }
+                    if root.peers.length > 0: GridLayout {
+                        width: 100%;
+                        height: 100%;
+                        padding: Theme.spacing-md;
+                        spacing: Theme.spacing-md;
+                        for p[idx] in root.peers: VideoTile {
+                            row: idx / 2;
+                            col: Math.mod(idx, 2);
+                            username: p.username;
+                            initial: p.initial;
+                            frame: p.frame;
+                            is_speaking: p.is_speaking;
+                            is_muted: p.is_muted;
+                            has_video: p.has_video;
+                            is_screen_share: p.is_screen_share;
+                        }
+                    }
+                }
+
+                if root.chat_visible: ChatPanel {
+                    vertical-stretch: 1;
+                    messages: root.chat_messages;
+                    send-chat(content) => { root.send_chat(content); }
+                }
+            }
+
+            ControlDock {
+                width: 100%;
+                toggle-mic => { root.toggle_mic(); }
+                toggle-camera => { root.toggle_camera(); }
+                toggle-screen-share => { root.toggle_screen_share(); }
+                toggle-deafen => { root.toggle_deafen(); }
+                leave-room => { root.leave_room(); }
+                mic_enabled: root.mic_enabled;
+                camera_enabled: root.camera_enabled;
+                screen_sharing: root.screen_sharing;
+                deafened: root.deafened;
+            }
+        }
+
+        // Self view (bottom-right above the dock).
+        VideoTile {
+            x: parent.width - 220px;
+            y: parent.height - 190px;
+            width: 200px;
+            height: 130px;
+            username: "You";
+            initial: "Y";
+            frame: root.local_video_frame;
+            is_speaking: false;
+            is_muted: !root.mic_enabled;
+            has_video: root.local_has_video;
+            is_screen_share: root.screen_sharing;
+        }
+
+        // Toast overlay (bottom strip, above everything).
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            padding: Theme.spacing-lg;
+            spacing: Theme.spacing-sm;
+            alignment: end;
+            for t in root.toasts: ToastCard {
+                text: t.text;
+                kind: t.kind;
+            }
+        }
+    }
+
+    // Keyboard shortcuts (Phase 4.9): Ctrl/Cmd + M/D/E, Ctrl+Shift+S.
+    // While the chat input has focus, keys are consumed there instead.
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(event) => {
+            if (event.modifiers.control || event.modifiers.meta) {
+                if (event.text.to_lowercase() == "m") { root.toggle_mic(); return accept; }
+                if (event.text.to_lowercase() == "d") { root.toggle_deafen(); return accept; }
+                if (event.text.to_lowercase() == "e") { root.toggle_camera(); return accept; }
+                if (event.modifiers.shift && event.text.to_lowercase() == "s") {
+                    root.toggle_screen_share();
+                    return accept;
+                }
+            }
+            reject
+        }
+    }
+}

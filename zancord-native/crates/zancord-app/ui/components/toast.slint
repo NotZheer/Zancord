@@ -1,0 +1,24 @@
+// Toast notifications (Phase 4.7): colored card; stacking and auto-dismiss
+// are driven from Rust (the model + a per-toast timer there).
+
+import { Theme } from "../theme.slint";
+
+export component ToastCard inherits Rectangle {
+    in property <string> text;
+    in property <string> kind; // "info" | "success" | "warning" | "error"
+
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: root.kind == "error" ? #ef4444d0
+        : (root.kind == "warning" ? #f59e0bd0
+        : (root.kind == "success" ? #22c55ed0
+        : #3b82f6d0));
+
+    Text {
+        text: root.text;
+        color: Theme.text-primary;
+        font-size: Theme.font-size-md;
+        horizontal-alignment: center;
+    }
+}
