@@ -66,24 +66,44 @@ async fn main() -> anyhow::Result<()> {
 
     let args = parse_args()?;
 
-    // Resolve default devices when not overridden (None disables that direction).
+    // Persistent config: prefer CLI flags, fall back to saved preferences,
+    // then the host default devices.
+    let mut config = zancord_app::config::AppConfig::load();
     let input_device = match args.input_device {
         Some(id) => Some(id),
-        None => zancord_app::app::default_device(zancord_audio::devices::list_input_devices()?),
+        None => match config.input_device.clone() {
+            Some(id) => Some(id),
+            None => {
+                zancord_app::app::default_device(zancord_audio::devices::list_input_devices()?)
+            }
+        },
     };
     let output_device = match args.output_device {
         Some(id) => Some(id),
-        None => zancord_app::app::default_device(zancord_audio::devices::list_output_devices()?),
+        None => match config.output_device.clone() {
+            Some(id) => Some(id),
+            None => {
+                zancord_app::app::default_device(zancord_audio::devices::list_output_devices()?)
+            }
+        },
     };
+
+    let ws_url = args.ws_url.expect("parsed");
+    let room = args.room.expect("parsed");
+    let username = args.username.expect("parsed");
+
+    // Remember the last room/username for the next launch.
+    config.last_room = Some(room.clone());
+    config.username = Some(username.clone());
+    if let Err(err) = config.save() {
+        tracing::warn!(error = %err, "failed to save config");
+    }
 
     let window = MainWindow::new()?;
     let weak = window.as_weak();
 
     // The orchestrator runs on a tokio worker; UI mutations hop back to the
     // UI thread via `upgrade_in_event_loop`.
-    let ws_url = args.ws_url.expect("parsed");
-    let room = args.room.expect("parsed");
-    let username = args.username.expect("parsed");
     tokio::spawn(zancord_app::app::App::run(
         weak,
         ws_url,

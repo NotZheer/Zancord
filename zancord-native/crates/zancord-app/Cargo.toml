@@ -22,8 +22,11 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 slint = { workspace = true }
 arboard = "3"
+directories = "5"
 
 [build-dependencies]
 slint-build = { workspace = true }
