@@ -56,6 +56,7 @@ impl PeerConnection {
         camera: bool,
         screen: bool,
         audio_sink: mpsc::Sender<EncodedAudioFrame>,
+        screen_audio_sink: mpsc::Sender<EncodedAudioFrame>,
         video_sink: mpsc::Sender<EncodedVideoFrame>,
         feedback_tx: broadcast::Sender<RtcpFeedback>,
         event_tx: broadcast::Sender<MeshEvent>,
@@ -135,18 +136,28 @@ impl PeerConnection {
             }));
         }
 
-        // Remote media: route by codec MIME into the decode channels.
+        // Remote media: route by codec MIME (and track id for audio) into the
+        // decode channels: `screen-audio` opus goes to the screen-audio sink.
         {
             let audio_sink = audio_sink.clone();
+            let screen_audio_sink = screen_audio_sink.clone();
             let video_sink = video_sink.clone();
             let peer_id = peer_id.clone();
             pc.on_track(Box::new(
                 move |track: Arc<TrackRemote>, _receiver, _transceiver| {
                     let audio_sink = audio_sink.clone();
+                    let screen_audio_sink = screen_audio_sink.clone();
                     let video_sink = video_sink.clone();
                     let peer_id = peer_id.clone();
                     Box::pin(async move {
-                        route_incoming_track(&peer_id, &track, &audio_sink, &video_sink).await;
+                        route_incoming_track(
+                            &peer_id,
+                            &track,
+                            &audio_sink,
+                            &screen_audio_sink,
+                            &video_sink,
+                        )
+                        .await;
                     })
                 },
             ));
@@ -319,28 +330,61 @@ impl PeerConnection {
     }
 }
 
-/// Routes an incoming remote track to the right decode channel by codec MIME.
+/// Which incoming channel an audio track belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioRoute {
+    Mic,
+    ScreenAudio,
+}
+
+/// Decides the audio route from the codec MIME and the remote track id.
+/// The screen-audio track is `screen-audio`; every other audio track is the
+/// peer's mic. Returns `None` for non-audio MIMEs.
+fn route_audio(mime: &str, track_id: &str) -> Option<AudioRoute> {
+    if !(mime.contains("opus") || mime.contains("audio/")) {
+        return None;
+    }
+    if track_id == "screen-audio" {
+        Some(AudioRoute::ScreenAudio)
+    } else {
+        Some(AudioRoute::Mic)
+    }
+}
+
+/// Routes an incoming remote track to the right decode channel by codec MIME
+/// and (for audio) track id.
 async fn route_incoming_track(
     peer_id: &str,
     track: &Arc<TrackRemote>,
     audio_sink: &mpsc::Sender<EncodedAudioFrame>,
+    screen_audio_sink: &mpsc::Sender<EncodedAudioFrame>,
     video_sink: &mpsc::Sender<EncodedVideoFrame>,
 ) {
     let mime = track.codec().capability.mime_type.to_lowercase();
     debug!(peer = %peer_id, id = %track.id(), mime = %mime, "incoming remote track");
 
-    if mime.contains("opus") || mime.contains("audio/") {
-        tokio::spawn(bridge::audio_receive_loop(
-            Arc::clone(track),
-            audio_sink.clone(),
-        ));
-    } else if mime.contains("vp8") || mime.contains("h264") || mime.contains("video/") {
-        tokio::spawn(bridge::video_receive_loop(
-            Arc::clone(track),
-            video_sink.clone(),
-        ));
-    } else {
-        warn!(peer = %peer_id, mime = %mime, "unsupported remote track codec, ignoring");
+    match route_audio(&mime, &track.id()) {
+        Some(AudioRoute::ScreenAudio) => {
+            tokio::spawn(bridge::audio_receive_loop(
+                Arc::clone(track),
+                screen_audio_sink.clone(),
+            ));
+        }
+        Some(AudioRoute::Mic) => {
+            tokio::spawn(bridge::audio_receive_loop(
+                Arc::clone(track),
+                audio_sink.clone(),
+            ));
+        }
+        None if mime.contains("vp8") || mime.contains("h264") || mime.contains("video/") => {
+            tokio::spawn(bridge::video_receive_loop(
+                Arc::clone(track),
+                video_sink.clone(),
+            ));
+        }
+        None => {
+            warn!(peer = %peer_id, id = %track.id(), mime = %mime, "unroutable incoming track");
+        }
     }
 }
 
@@ -367,8 +411,8 @@ mod tests {
 
     #[test]
     fn routing_helpers_accept_known_mimes() {
-        // Mirrors the dispatch in route_incoming_track.
-        let route = |mime: &str| {
+        // Mirrors the dispatch in route_incoming_track (mime-level).
+        let mime_route = |mime: &str| {
             if mime.contains("opus") || mime.contains("audio/") {
                 "audio"
             } else if mime.contains("vp8") || mime.contains("h264") || mime.contains("video/") {
@@ -377,11 +421,27 @@ mod tests {
                 "unknown"
             }
         };
-        assert_eq!(route("audio/opus"), "audio");
-        assert_eq!(route("video/VP8"), "video");
-        assert_eq!(route("video/H264"), "video");
-        assert_eq!(route("audio/G722"), "audio");
-        assert_eq!(route("application/rtx"), "unknown");
+        assert_eq!(mime_route("audio/opus"), "audio");
+        assert_eq!(mime_route("video/VP8"), "video");
+        assert_eq!(mime_route("video/H264"), "video");
+        assert_eq!(mime_route("audio/G722"), "audio");
+        assert_eq!(mime_route("application/rtx"), "unknown");
+    }
+
+    #[test]
+    fn screen_audio_track_routes_to_its_own_sink() {
+        // The screen-audio track id must win over the generic audio MIME route.
+        assert_eq!(
+            route_audio("audio/opus", "screen-audio"),
+            Some(AudioRoute::ScreenAudio)
+        );
+        assert_eq!(route_audio("audio/opus", "mic"), Some(AudioRoute::Mic));
+        assert_eq!(
+            route_audio("audio/opus", "anything-else"),
+            Some(AudioRoute::Mic)
+        );
+        assert_eq!(route_audio("video/h264", "screen"), None);
+        assert_eq!(route_audio("audio/g722", "mic"), Some(AudioRoute::Mic));
     }
 
     #[test]

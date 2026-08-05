@@ -249,6 +249,78 @@ async fn early_audio_writes_do_not_kill_the_send_loop() {
     b.shutdown().await.expect("b shuts down");
 }
 
+/// Screen-audio must travel on its own channel: mic frames and screen-audio
+/// frames from the same peer must not mix.
+#[tokio::test]
+async fn screen_audio_routes_to_a_dedicated_channel() {
+    let (a_sig_tx, mut a_sig_rx) = mpsc::channel(1024);
+    let (b_sig_tx, mut b_sig_rx) = mpsc::channel(1024);
+    let mut a = MeshManager::new("aaa".to_owned(), a_sig_tx, 5).expect("mesh a");
+    let mut b = MeshManager::new("bbb".to_owned(), b_sig_tx, 5).expect("mesh b");
+    let mut a_events = a.event_rx();
+    let mut b_events = b.event_rx();
+
+    // Attach the screen-audio track BEFORE the peers connect, so it is part
+    // of the initial SDP exchange.
+    a.set_screen_enabled(true).await.expect("a screen on");
+    b.set_screen_enabled(true).await.expect("b screen on");
+
+    a.handle_peer_joined(peer_info("bbb"))
+        .await
+        .expect("a joins b");
+    b.handle_peer_joined(peer_info("aaa"))
+        .await
+        .expect("b joins a");
+
+    pump_until_ice_connected(
+        &mut a_sig_rx,
+        &mut b,
+        &mut b_sig_rx,
+        &mut a,
+        &mut a_events,
+        &mut b_events,
+    )
+    .await;
+
+    let mut b_mic = b.take_incoming_audio("aaa").expect("b mic channel");
+    let mut b_screen = b
+        .take_incoming_screen_audio("aaa")
+        .expect("b screen-audio channel");
+
+    // Distinct payloads on the two send channels must arrive on the matching
+    // receive channels.
+    a.audio_tx()
+        .send(EncodedAudioFrame {
+            data: vec![0x01, 0x02, 0x03],
+            sequence: 1,
+            timestamp_ms: 20,
+        })
+        .await
+        .expect("a sends mic frame");
+    a.screen_audio_tx()
+        .send(EncodedAudioFrame {
+            data: vec![0xAA, 0xBB, 0xCC],
+            sequence: 1,
+            timestamp_ms: 20,
+        })
+        .await
+        .expect("a sends screen-audio frame");
+
+    let mic_frame = timeout(Duration::from_secs(5), b_mic.recv())
+        .await
+        .expect("mic frame arrives")
+        .expect("mic channel open");
+    let screen_frame = timeout(Duration::from_secs(5), b_screen.recv())
+        .await
+        .expect("screen-audio frame arrives")
+        .expect("screen-audio channel open");
+    assert_eq!(mic_frame.data, vec![0x01, 0x02, 0x03]);
+    assert_eq!(screen_frame.data, vec![0xAA, 0xBB, 0xCC]);
+
+    a.shutdown().await.expect("a shuts down");
+    b.shutdown().await.expect("b shuts down");
+}
+
 /// Drives one signaling message into the receiving negotiator.
 async fn deliver(sig_tx: &mpsc::Sender<SignalMessage>, msg: SignalMessage, neg: &Negotiator) {
     match msg {

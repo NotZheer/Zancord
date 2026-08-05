@@ -17,3 +17,4 @@ pub mod processor;
 pub mod resampler;
 
 pub use error::{AudioError, Result};
+pub use pipeline::IncomingAudioKind;

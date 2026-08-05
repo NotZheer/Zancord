@@ -85,8 +85,10 @@ pub struct MeshManager {
     audio_tx: mpsc::Sender<EncodedAudioFrame>,
     camera_tx: mpsc::Sender<EncodedVideoFrame>,
     screen_tx: mpsc::Sender<EncodedVideoFrame>,
+    screen_audio_tx: mpsc::Sender<EncodedAudioFrame>,
     /// Receive-side channels per peer (receiver halves taken by the app).
     incoming_audio: HashMap<String, mpsc::Receiver<EncodedAudioFrame>>,
+    incoming_screen_audio: HashMap<String, mpsc::Receiver<EncodedAudioFrame>>,
     incoming_video: HashMap<String, mpsc::Receiver<EncodedVideoFrame>>,
     /// Outgoing channels to the app.
     event_tx: broadcast::Sender<MeshEvent>,
@@ -117,9 +119,14 @@ impl MeshManager {
         let (audio_tx, audio_rx) = mpsc::channel(256);
         let (camera_tx, camera_rx) = mpsc::channel(64);
         let (screen_tx, screen_rx) = mpsc::channel(64);
+        let (screen_audio_tx, screen_audio_rx) = mpsc::channel(256);
         tokio::spawn(bridge::audio_send_loop(tracks.mic.clone(), audio_rx));
         tokio::spawn(bridge::video_send_loop(tracks.camera.clone(), camera_rx));
         tokio::spawn(bridge::video_send_loop(tracks.screen.clone(), screen_rx));
+        tokio::spawn(bridge::audio_send_loop(
+            tracks.screen_audio.clone(),
+            screen_audio_rx,
+        ));
 
         let (event_tx, _) = broadcast::channel(32);
         let (feedback_tx, _) = broadcast::channel(32);
@@ -137,7 +144,9 @@ impl MeshManager {
             audio_tx,
             camera_tx,
             screen_tx,
+            screen_audio_tx,
             incoming_audio: HashMap::new(),
+            incoming_screen_audio: HashMap::new(),
             incoming_video: HashMap::new(),
             event_tx,
             feedback_tx,
@@ -181,6 +190,12 @@ impl MeshManager {
         self.audio_tx.clone()
     }
 
+    /// Channel the screen-audio capture pushes encoded Opus frames into
+    /// (fan-out to every peer's screen-audio track).
+    pub fn screen_audio_tx(&self) -> mpsc::Sender<EncodedAudioFrame> {
+        self.screen_audio_tx.clone()
+    }
+
     /// Channel the camera pipeline pushes encoded video frames into.
     pub fn camera_tx(&self) -> mpsc::Sender<EncodedVideoFrame> {
         self.camera_tx.clone()
@@ -208,6 +223,16 @@ impl MeshManager {
         peer_id: &str,
     ) -> Option<mpsc::Receiver<EncodedAudioFrame>> {
         self.incoming_audio.remove(peer_id)
+    }
+
+    /// Takes the per-peer incoming screen-audio channel (stereo Opus frames
+    /// from `peer_id`'s screen share). Returns `None` if already taken or the
+    /// peer is unknown.
+    pub fn take_incoming_screen_audio(
+        &mut self,
+        peer_id: &str,
+    ) -> Option<mpsc::Receiver<EncodedAudioFrame>> {
+        self.incoming_screen_audio.remove(peer_id)
     }
 
     /// Takes the per-peer incoming video channel (RTP payloads from `peer_id`).
@@ -277,6 +302,7 @@ impl MeshManager {
         }
 
         let (audio_sink, audio_rx) = mpsc::channel(256);
+        let (screen_audio_sink, screen_audio_rx) = mpsc::channel(64);
         let (video_sink, video_rx) = mpsc::channel(64);
 
         let pc = PeerConnection::new(
@@ -287,6 +313,7 @@ impl MeshManager {
             self.camera_enabled,
             self.screen_enabled,
             audio_sink,
+            screen_audio_sink,
             video_sink,
             self.feedback_tx.clone(),
             self.event_tx.clone(),
@@ -295,6 +322,8 @@ impl MeshManager {
         .await?;
 
         self.incoming_audio.insert(peer.id.clone(), audio_rx);
+        self.incoming_screen_audio
+            .insert(peer.id.clone(), screen_audio_rx);
         self.incoming_video.insert(peer.id.clone(), video_rx);
         self.peers.insert(peer.id.clone(), pc);
         let _ = self.event_tx.send(MeshEvent::PeerConnected {
@@ -328,6 +357,7 @@ impl MeshManager {
             warn!(peer = %peer_id, error = %err, "peer close failed");
         }
         self.incoming_audio.remove(peer_id);
+        self.incoming_screen_audio.remove(peer_id);
         self.incoming_video.remove(peer_id);
         self.pending_signals.remove(peer_id);
         let _ = self.event_tx.send(MeshEvent::PeerDisconnected {

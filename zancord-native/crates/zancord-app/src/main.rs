@@ -26,6 +26,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use zancord_audio::pipeline::{AudioControl, AudioPipeline, PipelineConfig};
+use zancord_audio::IncomingAudioKind;
 use zancord_protocol::{MediaStatePayload, PeerInfo, SignalMessage};
 use zancord_signaling_client::SignalingClient;
 use zancord_transport::mesh::{IceState, MeshEvent, MeshManager};
@@ -354,13 +355,35 @@ async fn main() -> anyhow::Result<()> {
                                         info!(peer = %pid, "first remote audio frame forwarded");
                                         first = false;
                                     }
-                                    if tagged.send((pid.clone(), frame)).await.is_err() {
+                                    if tagged
+                                        .send((pid.clone(), IncomingAudioKind::Mic, frame))
+                                        .await
+                                        .is_err()
+                                    {
                                         return;
                                     }
                                 }
                             });
                         } else {
                             warn!(peer = %peer_id, "incoming audio channel already claimed or missing");
+                        }
+                        // The peer's screen share may also carry its own audio
+                        // (stereo Opus on the screen-audio track).
+                        if let Some(mut rx) = mesh.take_incoming_screen_audio(&peer_id) {
+                            info!(peer = %peer_id, "claimed incoming screen-audio channel");
+                            let tagged = audio_in_tx.clone();
+                            let pid = peer_id.clone();
+                            tokio::spawn(async move {
+                                while let Some(frame) = rx.recv().await {
+                                    if tagged
+                                        .send((pid.clone(), IncomingAudioKind::ScreenAudio, frame))
+                                        .await
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+                            });
                         }
                     }
                     MeshEvent::PeerDisconnected { peer_id } => {

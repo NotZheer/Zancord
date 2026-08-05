@@ -18,7 +18,9 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use zancord_protocol::{AudioProcessingConfig, EncodedAudioFrame, PeerId};
 
 use crate::capture::MicCapture;
-use crate::codec::{OpusDecoder, OpusEncoder, FRAME_SIZE, MAX_PACKET_BYTES, SAMPLE_RATE};
+use crate::codec::{
+    OpusDecoder, OpusEncoder, FRAME_SIZE, FRAME_SIZE_STEREO, MAX_PACKET_BYTES, SAMPLE_RATE,
+};
 use crate::devices;
 use crate::error::Result;
 use crate::playback::Playback;
@@ -78,6 +80,8 @@ pub struct TickSummary {
     pub received_frames: u64,
     /// Frames decoded (excluding PLC).
     pub decoded_frames: u64,
+    /// Screen-audio (stereo) frames decoded and downmixed.
+    pub screen_frames: u64,
     /// Missing frames concealed with PLC.
     pub plc_frames: u64,
     /// Frames dropped as stale/duplicate (sequence ≤ last seen).
@@ -86,6 +90,14 @@ pub struct TickSummary {
     pub tx_dropped: u64,
     /// Mono samples pushed to the speaker ring.
     pub playback_pushed: u64,
+}
+
+/// Which local audio source an incoming frame belongs to. Mic frames decode
+/// mono; screen-audio frames decode stereo and are downmixed into the mix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IncomingAudioKind {
+    Mic,
+    ScreenAudio,
 }
 
 /// The audio pipeline. Owned exclusively by the audio worker thread.
@@ -99,18 +111,20 @@ pub struct AudioPipeline {
     meter: LevelMeter,
     encoder: OpusEncoder,
     decoder: OpusDecoder,
+    screen_decoder: OpusDecoder,
     tx: Sender<EncodedAudioFrame>,
-    rx: Receiver<(PeerId, EncodedAudioFrame)>,
+    rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
     control_rx: Receiver<AudioControl>,
     config: PipelineConfig,
     sequence: u64,
     started_at: Instant,
-    last_seq: HashMap<PeerId, u64>,
+    last_seq: HashMap<(PeerId, IncomingAudioKind), u64>,
     stopped: bool,
     // Scratch buffers (worker thread only).
     pcm_in: Vec<i16>,
     packet_out: Vec<u8>,
     decode_out: Vec<i16>,
+    screen_decode_out: Vec<i16>,
     frame_buf: Vec<f32>,
     mix_buf: Vec<f32>,
     ring_scratch: [f32; 4096],
@@ -127,7 +141,7 @@ impl AudioPipeline {
         playback: Option<Playback>,
         config: PipelineConfig,
         tx: Sender<EncodedAudioFrame>,
-        rx: Receiver<(PeerId, EncodedAudioFrame)>,
+        rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
         control_rx: Receiver<AudioControl>,
     ) -> Result<Self> {
         let capture_resampler = match &capture {
@@ -151,6 +165,7 @@ impl AudioPipeline {
             meter: LevelMeter::new(SAMPLE_RATE, 50),
             encoder: OpusEncoder::new(config.opus_bitrate)?,
             decoder: OpusDecoder::new()?,
+            screen_decoder: OpusDecoder::new_stereo()?,
             tx,
             rx,
             control_rx,
@@ -162,6 +177,7 @@ impl AudioPipeline {
             pcm_in: vec![0; FRAME_SIZE],
             packet_out: Vec::with_capacity(MAX_PACKET_BYTES),
             decode_out: vec![0; FRAME_SIZE],
+            screen_decode_out: vec![0; FRAME_SIZE_STEREO],
             frame_buf: vec![0.0; FRAME_SIZE],
             mix_buf: vec![0.0; FRAME_SIZE],
             ring_scratch: [0.0; 4096],
@@ -179,7 +195,7 @@ impl AudioPipeline {
         input_device_id: Option<String>,
         output_device_id: Option<String>,
         tx: Sender<EncodedAudioFrame>,
-        rx: Receiver<(PeerId, EncodedAudioFrame)>,
+        rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
         control_rx: Receiver<AudioControl>,
     ) -> Result<JoinHandle<()>> {
         let handle = std::thread::Builder::new()
@@ -205,7 +221,7 @@ impl AudioPipeline {
         input_device_id: Option<String>,
         output_device_id: Option<String>,
         tx: Sender<EncodedAudioFrame>,
-        rx: Receiver<(PeerId, EncodedAudioFrame)>,
+        rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
         control_rx: Receiver<AudioControl>,
     ) -> Result<()> {
         let mut devices = devices::DeviceManager::new();
@@ -254,6 +270,7 @@ impl AudioPipeline {
         let mut sent = 0u64;
         let mut received = 0u64;
         let mut decoded = 0u64;
+        let mut screen = 0u64;
         let mut plc = 0u64;
         let mut dropped = 0u64;
 
@@ -264,6 +281,7 @@ impl AudioPipeline {
                     sent += summary.sent_frames;
                     received += summary.received_frames;
                     decoded += summary.decoded_frames;
+                    screen += summary.screen_frames;
                     plc += summary.plc_frames;
                     dropped += summary.dropped_peer_frames + summary.tx_dropped;
                 }
@@ -285,6 +303,7 @@ impl AudioPipeline {
                     sent,
                     received,
                     decoded,
+                    screen,
                     plc,
                     dropped,
                     overflow,
@@ -296,6 +315,7 @@ impl AudioPipeline {
                 sent = 0;
                 received = 0;
                 decoded = 0;
+                screen = 0;
                 plc = 0;
                 dropped = 0;
                 last_report = Instant::now();
@@ -336,7 +356,7 @@ impl AudioPipeline {
                     }
                 }
                 AudioControl::RemovePeer { peer } => {
-                    self.last_seq.remove(&peer);
+                    self.last_seq.retain(|(p, _), _| p != &peer);
                     if let Some(playback) = &mut self.playback {
                         playback.mixer_mut().remove_peer(&peer);
                     }
@@ -361,9 +381,9 @@ impl AudioPipeline {
     // --- Receive path: transport → decode (+PLC) → mix → resample → ring ---
 
     fn receive_frames(&mut self, summary: &mut TickSummary) -> Result<()> {
-        while let Ok((peer, frame)) = self.rx.try_recv() {
+        while let Ok((peer, kind, frame)) = self.rx.try_recv() {
             summary.received_frames += 1;
-            self.ingest(peer, frame, summary)?;
+            self.ingest(peer, kind, frame, summary)?;
         }
         Ok(())
     }
@@ -371,54 +391,86 @@ impl AudioPipeline {
     fn ingest(
         &mut self,
         peer: PeerId,
+        kind: IncomingAudioKind,
         frame: EncodedAudioFrame,
         summary: &mut TickSummary,
     ) -> Result<()> {
+        let key = (peer.clone(), kind);
         // Stale or duplicate (reordered delivery): drop, never re-decode.
         if self
             .last_seq
-            .get(&peer)
+            .get(&key)
             .is_some_and(|&last| frame.sequence <= last)
         {
             summary.dropped_peer_frames += 1;
             return Ok(());
         }
         // Conceal any missing frames with PLC before decoding the real one.
-        if let Some(&last) = self.last_seq.get(&peer) {
+        if let Some(&last) = self.last_seq.get(&key) {
             let gap = frame.sequence - last - 1;
             let concealed = gap.min(self.config.max_plc_frames as u64);
             for _ in 0..concealed {
-                self.decode_and_mix(&peer, None, summary)?;
+                self.decode_and_mix(&peer, kind, None, summary)?;
                 self.flush_mix(summary)?;
             }
         }
-        self.last_seq.insert(peer.clone(), frame.sequence);
-        self.decode_and_mix(&peer, Some(&frame.data), summary)?;
+        self.last_seq.insert(key, frame.sequence);
+        self.decode_and_mix(&peer, kind, Some(&frame.data), summary)?;
         self.flush_mix(summary)?;
         Ok(())
     }
 
+    /// Decodes a frame (or conceals one) and adds it to the mix. Stereo
+    /// screen-audio frames are downmixed to mono before joining the mix.
     fn decode_and_mix(
         &mut self,
         peer: &PeerId,
+        kind: IncomingAudioKind,
         packet: Option<&[u8]>,
         summary: &mut TickSummary,
     ) -> Result<()> {
-        let written = self.decoder.decode(packet, &mut self.decode_out)?;
+        let (written, samples) = match kind {
+            IncomingAudioKind::Mic => {
+                let written = self.decoder.decode(packet, &mut self.decode_out)?;
+                (written, &self.decode_out)
+            }
+            IncomingAudioKind::ScreenAudio => {
+                let written = self
+                    .screen_decoder
+                    .decode(packet, &mut self.screen_decode_out)?;
+                (written, &self.screen_decode_out)
+            }
+        };
         let volume = self
             .playback
             .as_ref()
             .map(|playback| playback.mixer().peer_volume(peer))
             .unwrap_or(1.0);
-        for (slot, &sample) in self
-            .mix_buf
-            .iter_mut()
-            .zip(self.decode_out.iter().take(written))
-        {
-            *slot += f32::from(sample) / 32768.0 * volume;
+        match kind {
+            IncomingAudioKind::Mic => {
+                for (slot, &sample) in self.mix_buf.iter_mut().zip(samples.iter().take(written)) {
+                    *slot += f32::from(sample) / 32768.0 * volume;
+                }
+            }
+            IncomingAudioKind::ScreenAudio => {
+                // Stereo → mono downmix (average L/R). `written` is the
+                // per-channel sample count (960 for a 20 ms frame), i.e. the
+                // number of L/R pairs to consume.
+                for (slot, pair) in self
+                    .mix_buf
+                    .iter_mut()
+                    .zip(samples.chunks_exact(2).take(written))
+                {
+                    let l = f32::from(pair[0]);
+                    let r = f32::from(pair[1]);
+                    *slot += ((l + r) / 2.0) / 32768.0 * volume;
+                }
+            }
         }
         if packet.is_none() {
             summary.plc_frames += 1;
+        } else if matches!(kind, IncomingAudioKind::ScreenAudio) {
+            summary.screen_frames += 1;
         } else {
             summary.decoded_frames += 1;
         }
