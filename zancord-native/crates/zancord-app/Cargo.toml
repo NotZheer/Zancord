@@ -23,6 +23,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 slint = { workspace = true }
+arboard = "3"
 
 [build-dependencies]
 slint-build = { workspace = true }
