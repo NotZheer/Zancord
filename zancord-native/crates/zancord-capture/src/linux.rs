@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use enumflags2::BitFlags;
@@ -119,6 +119,10 @@ impl ScreenCapturer for LinuxScreenCapturer {
         };
 
         // --- XDG Desktop Portal: session → picker → node id + fd ------------
+        // ashpd/zbus needs an active tokio runtime context; `start_capture`
+        // may run on a blocking thread (spawn_blocking from the app), so
+        // re-enter the runtime explicitly before driving the portal session.
+        let _guard = self.runtime.enter();
         let (node_id, fd) = self.runtime.block_on(async {
             let screencast = Screencast::new()
                 .await
@@ -212,44 +216,52 @@ impl ScreenCapturer for LinuxScreenCapturer {
             stream_error: Arc::clone(&self.stream_error),
             started: Instant::now(),
         };
-        let listener = stream
-            .add_local_listener_with_user_data(user_data)
-            .param_changed(|_, user_data, id, param| {
-                let Some(param) = param else { return };
-                if id != ParamType::Format.as_raw() {
-                    return;
-                }
-                if let Err(err) = user_data.format.parse(param) {
-                    warn!(error = %err, "failed to parse negotiated video format");
-                }
-            })
-            .process(|stream, user_data| {
-                let Some(mut buffer) = stream.dequeue_buffer() else {
-                    return;
-                };
-                let Some(frame) = buffer_to_frame(&mut buffer, user_data) else {
-                    return;
-                };
-                if user_data.video_tx.send(frame).is_err() {
-                    // Consumer gone; report so stop_capture surfaces it.
-                    *user_data.stream_error.lock().expect("stream_error lock") =
-                        Some("video channel closed".to_owned());
-                }
-            })
-            .register()
-            .context("failed to register stream listener")?;
-
         let pod_bytes = format_pod(config)?;
         let pod = Pod::from_bytes(&pod_bytes).context("failed to parse format pod")?;
-        let mut params = [pod];
-        stream
-            .connect(
-                pw::spa::utils::Direction::Input,
-                Some(node_id),
-                pw::stream::StreamFlags::MAP_BUFFERS | pw::stream::StreamFlags::RT_PROCESS,
-                &mut params,
-            )
-            .context("pw_stream_connect failed")?;
+
+        // Listener registration and pw_stream_connect must run while holding
+        // the thread loop lock — otherwise pw_stream_connect fails with
+        // "called from wrong context".
+        let listener = {
+            let _loop_guard = thread_loop.lock();
+            let listener = stream
+                .add_local_listener_with_user_data(user_data)
+                .param_changed(|_, user_data, id, param| {
+                    let Some(param) = param else { return };
+                    if id != ParamType::Format.as_raw() {
+                        return;
+                    }
+                    if let Err(err) = user_data.format.parse(param) {
+                        warn!(error = %err, "failed to parse negotiated video format");
+                    }
+                })
+                .process(|stream, user_data| {
+                    let Some(mut buffer) = stream.dequeue_buffer() else {
+                        return;
+                    };
+                    let Some(frame) = buffer_to_frame(&mut buffer, user_data) else {
+                        return;
+                    };
+                    if user_data.video_tx.send(frame).is_err() {
+                        // Consumer gone; report so stop_capture surfaces it.
+                        *user_data.stream_error.lock().expect("stream_error lock") =
+                            Some("video channel closed".to_owned());
+                    }
+                })
+                .register()
+                .context("failed to register stream listener")?;
+
+            let mut params = [pod];
+            stream
+                .connect(
+                    pw::spa::utils::Direction::Input,
+                    Some(node_id),
+                    pw::stream::StreamFlags::MAP_BUFFERS | pw::stream::StreamFlags::RT_PROCESS,
+                    &mut params,
+                )
+                .context("pw_stream_connect failed")?;
+            listener
+        };
 
         // Retain everything in dependency order so drops are safe.
         self.thread_loop = Some(thread_loop);

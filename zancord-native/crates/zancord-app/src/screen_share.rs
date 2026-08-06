@@ -43,6 +43,20 @@ pub struct ScreenShareSession {
 impl ScreenShareSession {
     /// Opens the platform capturer and spawns the capture/encode thread.
     pub fn start(mesh: &MeshManager, window: Weak<MainWindow>) -> Result<Self> {
+        Self::start_with_channels(
+            mesh.screen_tx(),
+            mesh.screen_audio_tx(),
+            mesh.feedback_rx(),
+            window,
+        )
+    }
+
+    pub fn start_with_channels(
+        screen_tx: tokio::sync::mpsc::Sender<EncodedVideoFrame>,
+        screen_audio_tx: tokio::sync::mpsc::Sender<zancord_protocol::EncodedAudioFrame>,
+        mut feedback_rx: tokio::sync::broadcast::Receiver<RtcpFeedback>,
+        window: Weak<MainWindow>,
+    ) -> Result<Self> {
         let mut capturer = create_capturer()?;
         let sources = capturer.available_sources()?;
         let source = sources
@@ -58,9 +72,6 @@ impl ScreenShareSession {
         };
         capturer.start_capture(&source, &config)?;
 
-        let screen_tx = mesh.screen_tx();
-        let screen_audio_tx = mesh.screen_audio_tx();
-        let mut feedback_rx = mesh.feedback_rx();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
 
@@ -247,11 +258,7 @@ pub fn spawn_remote_video_forwarder(
             let width = i420.width;
             let height = i420.height;
             let _ = window.upgrade_in_event_loop(move |w| {
-                let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    &rgba,
-                    width,
-                    height,
-                );
+                let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, width, height);
                 let img = Image::from_rgba8(buf);
                 if let Some(peers) = w
                     .get_peers()

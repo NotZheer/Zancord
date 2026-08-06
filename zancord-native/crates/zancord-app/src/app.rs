@@ -315,7 +315,23 @@ impl App {
                     })
                     .await;
                 if on {
-                    match crate::screen_share::ScreenShareSession::start(mesh, self.window.clone()) {
+                    let screen_tx = mesh.screen_tx();
+                    let screen_audio_tx = mesh.screen_audio_tx();
+                    let feedback_rx = mesh.feedback_rx();
+                    let window_clone = self.window.clone();
+                    // Platform capture (portal picker / SCK) may block for
+                    // seconds — never run it on the async UI context.
+                    let start_res = tokio::task::spawn_blocking(move || {
+                        crate::screen_share::ScreenShareSession::start_with_channels(
+                            screen_tx,
+                            screen_audio_tx,
+                            feedback_rx,
+                            window_clone,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {e}")));
+                    match start_res {
                         Ok(session) => self.screen_share = Some(session),
                         Err(err) => {
                             self.local_state.screen_sharing = false;
