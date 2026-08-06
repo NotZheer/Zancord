@@ -222,10 +222,21 @@ pub fn spawn_remote_video_forwarder(
                 return;
             }
         };
+        let mut decoded = 0u64;
+        let mut last_report = Instant::now();
         while let Some(frame) = rx.recv().await {
             let Ok(Some(i420)) = decoder.decode(&frame.data) else {
                 continue; // waiting for a keyframe / corrupt frame skipped
             };
+            decoded += 1;
+            if decoded == 1 {
+                info!(peer = %peer_id, width = i420.width, height = i420.height, "first remote video frame decoded");
+            }
+            if last_report.elapsed() >= Duration::from_secs(5) {
+                info!(peer = %peer_id, decoded, "video activity (last 5s): decoded=net->screen");
+                decoded = 0;
+                last_report = Instant::now();
+            }
             let Ok(rgba) = i420_to_rgba(&i420) else {
                 continue;
             };
