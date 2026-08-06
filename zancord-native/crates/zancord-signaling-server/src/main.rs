@@ -52,8 +52,8 @@ async fn main() -> anyhow::Result<()> {
     });
 
     if Path::new(CERT_FILE).exists() && Path::new(KEY_FILE).exists() {
-        match RustlsConfig::from_pem_file(CERT_FILE, KEY_FILE).await {
-            Ok(config) => {
+        match tls_config(Path::new(CERT_FILE), Path::new(KEY_FILE)).await {
+            Ok(Some(config)) => {
                 let addr: SocketAddr = TLS_ADDR
                     .parse()
                     .with_context(|| format!("invalid TLS addr {TLS_ADDR}"))?;
@@ -64,6 +64,9 @@ async fn main() -> anyhow::Result<()> {
                 {
                     warn!(target: "zancord_signaling_server", error = %e, "TLS server stopped; plain WS continues");
                 }
+            }
+            Ok(None) => {
+                warn!(target: "zancord_signaling_server", "no {CERT_FILE}/{KEY_FILE} next to the working directory; TLS on {TLS_ADDR} disabled")
             }
             Err(e) => {
                 warn!(target: "zancord_signaling_server", error = %e, "failed to load TLS certs; serving plain WS only")
@@ -76,4 +79,30 @@ async fn main() -> anyhow::Result<()> {
     // The plain server runs in a spawned task; keep the process alive.
     std::future::pending::<()>().await;
     Ok(())
+}
+
+/// Best-effort TLS config: `Ok(None)` when the cert/key pair is absent (plain
+/// WS only), `Ok(Some)` once loaded. Errors are returned, never panicked — a
+/// TLS failure must not take the plain-WS server down with it.
+async fn tls_config(cert: &Path, key: &Path) -> anyhow::Result<Option<RustlsConfig>> {
+    if cert.exists() && key.exists() {
+        Ok(Some(RustlsConfig::from_pem_file(cert, key).await?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_certs_means_plain_ws_only() {
+        let dir = std::env::temp_dir().join(format!("zancord-tls-test-{}", std::process::id()));
+        let config = tls_config(&dir.join("cert.pem"), &dir.join("key.pem"))
+            .await
+            .expect("absent certs are not an error");
+        assert!(config.is_none(), "no cert/key pair -> plain WS only");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

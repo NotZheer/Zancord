@@ -10,6 +10,11 @@ zancord-protocol = { workspace = true }
 tokio = { workspace = true }
 axum = { version = "0.7", features = ["ws"] }
 axum-server = { version = "0.7.3", features = ["tls-rustls"] }
+# axum-server's tls-rustls feature enables rustls/aws-lc-rs and pulls rustls
+# with default-features = false; the crypto provider feature must therefore be
+# enabled here, and it must be aws-lc-rs — adding a second provider (ring)
+# panics rustls at runtime with "exactly one provider" errors.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12", "logging"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
