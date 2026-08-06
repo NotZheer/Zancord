@@ -17,12 +17,11 @@ pub const FRAME_SIZE: usize = 960;
 pub const FRAME_SIZE_STEREO: usize = FRAME_SIZE * 2;
 /// Largest possible encoded Opus frame at 48 kHz.
 pub const MAX_PACKET_BYTES: usize = 1275;
+
 /// Default bitrate: 32 kbps (configurable).
 pub const DEFAULT_BITRATE: i32 = 32_000;
 /// Screen-audio bitrate (stereo Music): 64 kbps per the plan.
 pub const SCREEN_AUDIO_BITRATE: i32 = 64_000;
-/// Packet-loss estimate fed to the encoder so in-band FEC is actually produced.
-const PACKET_LOSS_PERCENT: i32 = 10;
 
 /// Opus encoder: 48 kHz, mono VoIP (mic) or stereo Music (screen audio).
 pub struct OpusEncoder {
@@ -57,12 +56,18 @@ impl OpusEncoder {
     ) -> Result<Self> {
         let mut inner = OpusEncoderInner::new(SAMPLE_RATE, channels, application)?;
         inner.set_bitrate(Bitrate::Bits(bitrate))?;
-        inner.set_inband_fec(true)?;
-        inner.set_packet_loss_perc(PACKET_LOSS_PERCENT)?;
+        // FEC deliberately OFF: the receiver never decodes in-band FEC (no
+        // `OPUS_SET_INBAND_FEC` on the decoder in the `opus` crate), and with
+        // `packet_loss_perc > 0` the encoder emits redundancy-only packets for
+        // exact-zero frames (noise-gate-closed periods) that the receiver
+        // misdecodes as the previous frame — ~-19 dB repeated audio during
+        // pauses. PLC on the receiver covers short loss instead.
+        inner.set_inband_fec(false)?;
+        inner.set_packet_loss_perc(0)?;
         Ok(Self {
             inner,
             bitrate,
-            fec: true,
+            fec: false,
             frame_samples,
         })
     }

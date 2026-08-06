@@ -33,6 +33,10 @@ pub const TICK_INTERVAL: Duration = Duration::from_millis(20);
 pub const CONTROL_CAPACITY: usize = 32;
 /// Transport frame queue capacity (frames to/from the WebRTC layer).
 pub const FRAME_QUEUE_CAPACITY: usize = 256;
+/// Voice-activity thresholds (dBFS) for the speaking ring, with 5 dB
+/// hysteresis so the ring doesn't flap at the threshold.
+const VAD_ON_DB: f32 = -40.0;
+const VAD_OFF_DB: f32 = -45.0;
 
 /// Configuration for the audio pipeline.
 #[derive(Debug, Clone)]
@@ -64,11 +68,29 @@ impl Default for PipelineConfig {
 /// Commands from other threads (UI/orchestrator), applied on the audio thread.
 #[derive(Debug, Clone)]
 pub enum AudioControl {
-    SetPeerVolume { peer: PeerId, volume: f32 },
-    RemovePeer { peer: PeerId },
-    SetDeafened { deafened: bool },
+    SetPeerVolume {
+        peer: PeerId,
+        volume: f32,
+    },
+    RemovePeer {
+        peer: PeerId,
+    },
+    SetDeafened {
+        deafened: bool,
+    },
     SetProcessing(AudioProcessingConfig),
+    /// Swap the transport sender (the mesh was rebuilt after a signaling
+    /// reconnect assigned a new peer id).
+    SetMeshSender(Sender<EncodedAudioFrame>),
     Shutdown,
+}
+
+/// Outbound events from the pipeline (voice activity for the speaking ring).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioEvent {
+    /// A peer's decoded mic audio crossed the voice-activity threshold.
+    /// Emitted only on transitions, so the UI updates stay cheap.
+    Speaking { peer: PeerId, speaking: bool },
 }
 
 /// Per-tick accounting, useful for diagnostics and tests.
@@ -115,6 +137,9 @@ pub struct AudioPipeline {
     tx: Sender<EncodedAudioFrame>,
     rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
     control_rx: Receiver<AudioControl>,
+    event_tx: Sender<AudioEvent>,
+    /// Per-peer voice-activity state (hysteresis, so rings don't flap).
+    speaking: HashMap<PeerId, bool>,
     config: PipelineConfig,
     sequence: u64,
     started_at: Instant,
@@ -143,6 +168,7 @@ impl AudioPipeline {
         tx: Sender<EncodedAudioFrame>,
         rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
         control_rx: Receiver<AudioControl>,
+        event_tx: Sender<AudioEvent>,
     ) -> Result<Self> {
         let capture_resampler = match &capture {
             Some(capture) => Some(CaptureResampler::new(
@@ -169,6 +195,8 @@ impl AudioPipeline {
             tx,
             rx,
             control_rx,
+            event_tx,
+            speaking: HashMap::new(),
             config,
             sequence: 0,
             started_at: Instant::now(),
@@ -197,6 +225,7 @@ impl AudioPipeline {
         tx: Sender<EncodedAudioFrame>,
         rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
         control_rx: Receiver<AudioControl>,
+        event_tx: Sender<AudioEvent>,
     ) -> Result<JoinHandle<()>> {
         let handle = std::thread::Builder::new()
             .name("zancord-audio-pipeline".to_string())
@@ -208,6 +237,7 @@ impl AudioPipeline {
                     tx,
                     rx,
                     control_rx,
+                    event_tx,
                 );
                 if let Err(error) = result {
                     tracing::error!(target: "zancord_audio", %error, "audio pipeline failed to start");
@@ -223,6 +253,7 @@ impl AudioPipeline {
         tx: Sender<EncodedAudioFrame>,
         rx: Receiver<(PeerId, IncomingAudioKind, EncodedAudioFrame)>,
         control_rx: Receiver<AudioControl>,
+        event_tx: Sender<AudioEvent>,
     ) -> Result<()> {
         let mut devices = devices::DeviceManager::new();
         let capture = match input_device_id {
@@ -257,7 +288,7 @@ impl AudioPipeline {
             }
             None => None,
         };
-        let mut pipeline = Self::with_io(capture, playback, config, tx, rx, control_rx)?;
+        let mut pipeline = Self::with_io(capture, playback, config, tx, rx, control_rx, event_tx)?;
         pipeline.run_loop();
         Ok(())
     }
@@ -357,6 +388,7 @@ impl AudioPipeline {
                 }
                 AudioControl::RemovePeer { peer } => {
                     self.last_seq.retain(|(p, _), _| p != &peer);
+                    self.speaking.remove(&peer);
                     if let Some(playback) = &mut self.playback {
                         playback.mixer_mut().remove_peer(&peer);
                     }
@@ -372,6 +404,10 @@ impl AudioPipeline {
                     self.gate.set_enabled(config.noise_gate_enabled);
                     self.gate.set_threshold_db(config.noise_gate_threshold_db);
                     self.config.processing = config;
+                }
+                AudioControl::SetMeshSender(tx) => {
+                    self.tx = tx;
+                    tracing::info!(target: "zancord_audio", "mesh transport sender swapped");
                 }
                 AudioControl::Shutdown => self.stopped = true,
             }
@@ -446,6 +482,20 @@ impl AudioPipeline {
             .as_ref()
             .map(|playback| playback.mixer().peer_volume(peer))
             .unwrap_or(1.0);
+        // Voice activity: mic frames only (screen audio is content, not
+        // speech). The dB level is computed here while `samples` is borrowed;
+        // the state machine mutates `self` after the mixing loop.
+        let vad_db = if matches!(kind, IncomingAudioKind::Mic) && written > 0 {
+            let mut sum_sq = 0f64;
+            for &s in &samples[..written] {
+                let f = f32::from(s) / 32768.0;
+                sum_sq += f64::from(f * f);
+            }
+            let rms = (sum_sq / written as f64).sqrt();
+            Some((20.0 * rms.log10()) as f32)
+        } else {
+            None
+        };
         match kind {
             IncomingAudioKind::Mic => {
                 for (slot, &sample) in self.mix_buf.iter_mut().zip(samples.iter().take(written)) {
@@ -474,7 +524,29 @@ impl AudioPipeline {
         } else {
             summary.decoded_frames += 1;
         }
+        if let Some(db) = vad_db {
+            self.update_vad(peer, db);
+        }
         Ok(())
+    }
+
+    /// Per-peer voice-activity gate with hysteresis: the ring turns on above
+    /// `VAD_ON_DB` and off below `VAD_OFF_DB`. Emits `AudioEvent::Speaking`
+    /// only on transitions (the UI just toggles a class, so 50 events/s per
+    /// peer would be pure churn).
+    fn update_vad(&mut self, peer: &PeerId, db: f32) {
+        let was = self.speaking.get(peer).copied().unwrap_or(false);
+        if std::env::var("ZANCORD_VAD_DEBUG").is_ok() {
+            eprintln!("VAD: peer={peer} db={db} was={was}");
+        }
+        let now = db > VAD_ON_DB || (was && db > VAD_OFF_DB);
+        if now != was {
+            self.speaking.insert(peer.clone(), now);
+            let _ = self.event_tx.try_send(AudioEvent::Speaking {
+                peer: peer.clone(),
+                speaking: now,
+            });
+        }
     }
 
     fn flush_mix(&mut self, summary: &mut TickSummary) -> Result<()> {

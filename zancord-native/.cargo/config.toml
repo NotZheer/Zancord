@@ -9,6 +9,12 @@ rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
 
+# CMake 4.x removed compatibility with projects requiring CMake < 3.5; the
+# vendored Opus in audiopus-sys still declares an old minimum. Restore it for
+# all cmake-based dependencies (audiopus only; harmless for anything newer).
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
 [build]
 # Keep incremental artifacts out of per-crate target dirs; single shared target.
 target-dir = "target"

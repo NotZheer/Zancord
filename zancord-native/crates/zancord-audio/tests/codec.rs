@@ -17,6 +17,43 @@ fn rms(samples: &[i16]) -> f32 {
     (sum_sq / samples.len() as f32).sqrt()
 }
 
+fn db(samples: &[i16]) -> f32 {
+    20.0 * (rms(samples) / 32768.0).log10()
+}
+
+/// Regression: a loud frame followed by a gate-realistic release (ramp down,
+/// then exact zeros — what the noise gate outputs while closed) must decode
+/// to quiet within a frame or two. With encoder FEC + packet-loss-percentage
+/// enabled, redundancy-only packets for zero input decode as the previous
+/// frame (~-19 dB repeated audio for the whole pause).
+#[test]
+fn silence_after_loud_decodes_quiet() {
+    let mut encoder = OpusEncoder::new(32_000).unwrap();
+    let mut decoder = OpusDecoder::new().unwrap();
+    let levels: Vec<f32> = [0.5f32, 0.2, 0.05, 0.0, 0.0, 0.0]
+        .into_iter()
+        .map(|amp| {
+            let input: Vec<i16> = if amp == 0.0 {
+                vec![0i16; FRAME_SIZE]
+            } else {
+                sine_i16(440.0, FRAME_SIZE, amp)
+            };
+            let packet = encoder.encode(&input).unwrap();
+            db(&decoder.decode_frame(Some(&packet)).unwrap())
+        })
+        .collect::<Vec<_>>();
+    eprintln!("release decodes: {levels:?}");
+    // The release must be quiet by the first zero frame...
+    assert!(
+        levels[3] < -35.0,
+        "first zero frame too loud: {} dB",
+        levels[3]
+    );
+    // ...and inaudible shortly after.
+    assert!(levels[4] < -60.0, "second zero frame: {} dB", levels[4]);
+    assert!(levels[5] < -80.0);
+}
+
 #[test]
 fn opus_roundtrip_within_lossy_tolerance() {
     let mut encoder = OpusEncoder::new(32_000).unwrap();
@@ -103,7 +140,12 @@ fn decoder_rejects_small_output_buffer() {
 #[test]
 fn encoder_fec_and_bitrate_settable() {
     let mut encoder = OpusEncoder::new(32_000).unwrap();
-    assert!(encoder.fec(), "in-band FEC must be on by default");
+    // FEC defaults OFF: the receiver has no in-band-FEC decode path, and the
+    // redundancy-only packets it would emit for gate-closed (zero) frames are
+    // misdecoded as repeated audio (see silence_after_loud_decodes_quiet).
+    assert!(!encoder.fec(), "in-band FEC must be off by default");
+    encoder.set_fec(true).unwrap();
+    assert!(encoder.fec());
     encoder.set_fec(false).unwrap();
     assert!(!encoder.fec());
     encoder.set_bitrate(16_000).unwrap();
