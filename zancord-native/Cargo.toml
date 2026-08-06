@@ -35,3 +35,10 @@ zancord-protocol = { path = "crates/zancord-protocol" }
 [profile.release]
 lto = "thin"
 opt-level = 3
+
+# Dependencies (codecs, webrtc, opus, …) ship C/Rust code that is unusably
+# slow at -O0 — openh264 720p encode took ~100-250 ms/frame in dev builds.
+# Compile third-party crates with -O2 while keeping our own crates -O0 for
+# fast incremental dev builds.
+[profile.dev.package."*"]
+opt-level = 2
