@@ -25,7 +25,7 @@ use anyhow::{bail, Context};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-use zancord_audio::pipeline::{AudioControl, AudioPipeline, PipelineConfig};
+use zancord_audio::pipeline::{AudioControl, AudioEvent, AudioPipeline, PipelineConfig};
 use zancord_audio::IncomingAudioKind;
 use zancord_protocol::{MediaStatePayload, PeerInfo, SignalMessage};
 use zancord_signaling_client::SignalingClient;
@@ -235,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
     // channel fed by per-peer forwarders.
     let (audio_in_tx, audio_in_rx) = mpsc::channel(256);
     let (control_tx, control_rx) = mpsc::channel(64);
+    let (audio_event_tx, mut audio_event_rx) = mpsc::channel(64);
     let audio_handle = AudioPipeline::spawn(
         PipelineConfig::default(),
         input_device.clone(),
@@ -242,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
         mesh.as_ref().expect("mesh exists").audio_tx(),
         audio_in_rx,
         control_rx,
+        audio_event_tx,
     )
     .context("audio pipeline failed to start")?;
     info!("audio pipeline running (mic -> Opus -> mesh, mesh -> mix -> speakers)");
@@ -283,6 +285,9 @@ async fn main() -> anyhow::Result<()> {
                             rebuild_mesh(old, &new_self.id, peers, mesh_sig_tx.clone()).await?;
                         mesh = Some(new_mesh);
                         mesh_events = new_events;
+                        // The audio pipeline still holds the old mesh's sender.
+                        let tx = mesh.as_ref().expect("mesh exists").audio_tx();
+                        let _ = control_tx.send(AudioControl::SetMeshSender(tx)).await;
                     } else {
                         let mesh_ref = mesh.as_mut().expect("mesh exists");
                         let local_id = mesh_ref.local_id().to_string();
@@ -408,6 +413,11 @@ async fn main() -> anyhow::Result<()> {
                 if let Err(err) = client.send(msg).await {
                     warn!(error = %err, "signaling send failed");
                 }
+            }
+            ev = audio_event_rx.recv() => {
+                let Some(ev) = ev else { continue };
+                let AudioEvent::Speaking { peer, speaking } = ev;
+                println!("[speaking] {peer}: {speaking}");
             }
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { break };

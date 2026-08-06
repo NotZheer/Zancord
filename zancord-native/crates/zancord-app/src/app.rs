@@ -17,7 +17,7 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::{ChatMessage, MainWindow, PeerData, Toast};
-use zancord_audio::pipeline::{AudioControl, AudioPipeline, PipelineConfig};
+use zancord_audio::pipeline::{AudioControl, AudioEvent, AudioPipeline, PipelineConfig};
 use zancord_audio::IncomingAudioKind;
 use zancord_protocol::{EncodedAudioFrame, MediaStatePayload, PeerInfo, SignalMessage};
 use zancord_signaling_client::SignalingClient;
@@ -44,11 +44,17 @@ pub struct App {
     client: Arc<SignalingClient>,
     room: String,
     endpoint: String,
+    /// Our username — the only stable identity across reconnects (the server
+    /// assigns a fresh peer id on every join).
+    username: String,
     self_id: String,
     /// peer id → username (for tiles; the mesh only tracks ids).
     usernames: HashMap<String, String>,
     mesh: Option<MeshManager>,
     mesh_events: Option<broadcast::Receiver<MeshEvent>>,
+    /// Outbound signaling from the mesh, forwarded to the client. Replaced
+    /// together with the mesh on reconnect.
+    mesh_sig_rx: Option<mpsc::Receiver<SignalMessage>>,
     audio_control: Option<mpsc::Sender<AudioControl>>,
     screen_share: Option<crate::screen_share::ScreenShareSession>,
     camera_session: Option<crate::camera::CameraSession>,
@@ -88,8 +94,8 @@ impl App {
         info!(self_id = %self_id, peers = initial_peers.len(), "joined room {room}");
 
         // Mesh: outbound signaling flows through this channel to the client.
-        let (mesh_sig_tx, mut mesh_sig_rx) = mpsc::channel(256);
-        let mut mesh = MeshManager::new(self_id.clone(), mesh_sig_tx.clone(), MESH_CAPACITY)
+        let (mesh_sig_tx, mesh_sig_rx) = mpsc::channel(256);
+        let mut mesh = MeshManager::new(self_id.clone(), mesh_sig_tx, MESH_CAPACITY)
             .context("mesh creation failed")?;
         // Subscribe BEFORE joining initial peers: `PeerConnected` is broadcast
         // during `handle_peer_joined` (see the one-way-audio fix).
@@ -104,9 +110,10 @@ impl App {
         }
 
         // Audio: encoded frames out via the mesh, remote frames in via tagged
-        // channels fed by per-peer forwarders.
+        // channels fed by per-peer forwarders; speaking events out for the UI.
         let (audio_in_tx, audio_in_rx) = mpsc::channel(256);
         let (control_tx, control_rx) = mpsc::channel(64);
+        let (audio_event_tx, mut audio_event_rx) = mpsc::channel(64);
         let audio_handle = AudioPipeline::spawn(
             PipelineConfig::default(),
             input_device,
@@ -114,6 +121,7 @@ impl App {
             mesh.audio_tx(),
             audio_in_rx,
             control_rx,
+            audio_event_tx,
         )
         .context("audio pipeline failed to start")?;
         info!("audio pipeline running (mic -> Opus -> mesh, mesh -> mix -> speakers)");
@@ -133,10 +141,12 @@ impl App {
             client,
             room: room.to_owned(),
             endpoint,
+            username,
             self_id,
             usernames,
             mesh: Some(mesh),
             mesh_events: Some(mesh_events),
+            mesh_sig_rx: Some(mesh_sig_rx),
             audio_control: Some(control_tx),
             screen_share: None,
             camera_session: None,
@@ -187,11 +197,15 @@ impl App {
                     let Ok(mev) = mev else { continue };
                     app.handle_mesh_event(mev, &audio_in_tx).await;
                 }
-                sig = mesh_sig_rx.recv() => {
+                sig = app.mesh_sig_rx.as_mut().expect("signaling rx").recv() => {
                     let Some(sig) = sig else { continue };
                     if let Err(err) = app.client.send(sig).await {
                         warn!(error = %err, "signaling send failed");
                     }
+                }
+                ev = audio_event_rx.recv() => {
+                    let Some(ev) = ev else { continue };
+                    app.handle_audio_event(ev);
                 }
             }
         }
@@ -398,39 +412,8 @@ impl App {
                     })
                     .await;
                 if on {
-                    let screen_tx = mesh.screen_tx();
-                    let screen_audio_tx = mesh.screen_audio_tx();
-                    let feedback_rx = mesh.feedback_rx();
-                    let window_clone = self.window.clone();
-                    // Platform capture (portal picker / SCK) may block for
-                    // seconds — never run it on the async UI context.
-                    let start_res = tokio::task::spawn_blocking(move || {
-                        crate::screen_share::ScreenShareSession::start_with_channels(
-                            screen_tx,
-                            screen_audio_tx,
-                            feedback_rx,
-                            window_clone,
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {e}")));
-                    match start_res {
-                        Ok(session) => self.screen_share = Some(session),
-                        Err(err) => {
-                            self.local_state.screen_sharing = false;
-                            mesh.set_screen_enabled(false).await?;
-                            let _ = self
-                                .client
-                                .send(SignalMessage::MediaState {
-                                    peer_id: local_id.clone(),
-                                    state: self.local_state,
-                                })
-                                .await;
-                            self.notify(format!("Screen share failed: {err}"), "error");
-                            let window = self.window.clone();
-                            let _ = window.upgrade_in_event_loop(|w| w.set_screen_sharing(false));
-                            return Ok(true);
-                        }
+                    if !self.start_screen_session().await? {
+                        return Ok(true); // failure already reverted + toasted
                     }
                 } else if let Some(mut session) = self.screen_share.take() {
                     session.stop();
@@ -570,24 +553,173 @@ impl App {
         }
     }
 
+    /// Starts the screen-share session (capture + encode + mesh fan-out). On
+    /// failure the mesh track + media state are reverted and an error toast is
+    /// shown; returns `false` in that case.
+    async fn start_screen_session(&mut self) -> anyhow::Result<bool> {
+        let Some(mesh) = self.mesh.as_mut() else {
+            return Ok(false);
+        };
+        let screen_tx = mesh.screen_tx();
+        let screen_audio_tx = mesh.screen_audio_tx();
+        let feedback_rx = mesh.feedback_rx();
+        let window_clone = self.window.clone();
+        // Platform capture (portal picker / SCK) may block for seconds — never
+        // run it on the async UI context.
+        let start_res = tokio::task::spawn_blocking(move || {
+            crate::screen_share::ScreenShareSession::start_with_channels(
+                screen_tx,
+                screen_audio_tx,
+                feedback_rx,
+                window_clone,
+            )
+        })
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {e}")));
+        match start_res {
+            Ok(session) => {
+                self.screen_share = Some(session);
+                Ok(true)
+            }
+            Err(err) => {
+                self.local_state.screen_sharing = false;
+                if let Some(mesh) = self.mesh.as_mut() {
+                    mesh.set_screen_enabled(false).await?;
+                }
+                let _ = self
+                    .client
+                    .send(SignalMessage::MediaState {
+                        peer_id: self.self_id.clone(),
+                        state: self.local_state,
+                    })
+                    .await;
+                self.notify(format!("Screen share failed: {err}"), "error");
+                let window = self.window.clone();
+                let _ = window.upgrade_in_event_loop(|w| {
+                    w.set_screen_sharing(false);
+                });
+                Ok(false)
+            }
+        }
+    }
+
+    /// After a signaling reconnect the server assigns a new peer id and the
+    /// old mesh is stale (peer ids change; WebRTC signaling doesn't survive).
+    /// Rebuilds the mesh, re-joins everyone, reroutes the audio pipeline's
+    /// transport sender, and re-arms camera/screen captures that were live.
+    async fn rebuild_for_reconnect(
+        &mut self,
+        peers: &[PeerInfo],
+        new_id: &str,
+    ) -> anyhow::Result<()> {
+        let was_sharing = self.local_state.screen_sharing;
+        let was_camera = self.local_state.camera_enabled;
+
+        // Capture sessions hold channels bound to the dying mesh.
+        if let Some(mut session) = self.screen_share.take() {
+            session.stop();
+        }
+        if let Some(mut session) = self.camera_session.take() {
+            session.stop();
+        }
+
+        // New mesh; subscribe to events BEFORE joining peers (a lost
+        // `PeerConnected` means that peer's incoming channels are never
+        // claimed — silent one-way audio).
+        let (mesh_sig_tx, mesh_sig_rx) = mpsc::channel(256);
+        let mut new_mesh = MeshManager::new(new_id.to_owned(), mesh_sig_tx, MESH_CAPACITY)
+            .context("mesh creation failed")?;
+        let new_events = new_mesh.event_rx();
+        for peer in peers.iter().filter(|p| p.id != new_id) {
+            if let Err(err) = new_mesh.handle_peer_joined(peer.clone()).await {
+                warn!(peer = %peer.id, error = %err, "rejoin failed for existing peer");
+            }
+        }
+        if let Some(mut old_mesh) = self.mesh.replace(new_mesh) {
+            if let Err(err) = old_mesh.shutdown().await {
+                warn!(error = %err, "old mesh shutdown failed");
+            }
+        }
+        self.mesh_events = Some(new_events);
+        self.mesh_sig_rx = Some(mesh_sig_rx);
+        self.self_id = new_id.to_owned();
+        self.usernames = peers
+            .iter()
+            .filter(|p| p.id != new_id)
+            .map(|p| (p.id.clone(), p.username.clone()))
+            .collect();
+
+        // Point the audio pipeline at the new mesh's transport sender.
+        if let Some(control) = &self.audio_control {
+            let tx = self.mesh.as_ref().expect("mesh exists").audio_tx();
+            if control.send(AudioControl::SetMeshSender(tx)).await.is_err() {
+                warn!("audio pipeline gone; mic disabled after reconnect");
+            }
+        }
+
+        // Tiles carry stale peer ids; the new mesh re-emits PeerConnected +
+        // initial MediaState for every peer, so start from a clean grid.
+        self.clear_peer_tiles();
+        self.notify("Reconnected — rebuilding room".into(), "info");
+
+        // Re-arm media that was live before the blip.
+        if was_camera {
+            self.local_state.camera_enabled = true;
+            if let Some(mesh) = self.mesh.as_mut() {
+                mesh.set_camera_enabled(true).await?;
+            }
+            if !self.start_camera_session(self.camera_index).await? {
+                // Failure already reverted + toasted.
+            }
+        }
+        if was_sharing {
+            self.local_state.screen_sharing = true;
+            if let Some(mesh) = self.mesh.as_mut() {
+                mesh.set_screen_enabled(true).await?;
+            }
+            if !self.start_screen_session().await? {
+                // Failure already reverted + toasted.
+            }
+        }
+
+        // Fresh state for the server (it stores per-peer media state for
+        // late joiners) and the other peers.
+        let _ = self
+            .client
+            .send(SignalMessage::MediaState {
+                peer_id: self.self_id.clone(),
+                state: self.local_state,
+            })
+            .await;
+        info!(new_id = %self.self_id, "room rebuilt after reconnect");
+        Ok(())
+    }
+
     /// Routes one signaling message; returns false when the loop must end.
     async fn handle_signal(&mut self, msg: SignalMessage) -> anyhow::Result<bool> {
         if let SignalMessage::RoomState { peers } = &msg {
-            let Some(new_self) = peers.iter().find(|p| p.id == self.self_id) else {
+            // Find ourselves by username: the server assigns a fresh id on
+            // every join, so our old id is gone after a reconnect.
+            let Some(new_self) = peers.iter().find(|p| p.username == self.username) else {
                 return Ok(true);
             };
-            // Same id: just (re)join the listed peers.
-            let mesh = self.mesh.as_mut().expect("mesh exists");
-            let local_id = mesh.local_id().to_string();
-            self.usernames = peers
-                .iter()
-                .filter(|p| p.id != local_id)
-                .map(|p| (p.id.clone(), p.username.clone()))
-                .collect();
-            for peer in peers.iter().filter(|p| p.id != local_id) {
-                mesh.handle_peer_joined(peer.clone()).await?;
+            let current_id = self.mesh.as_ref().map(|m| m.local_id().to_string());
+            if current_id.as_deref() != Some(new_self.id.as_str()) {
+                info!(new_id = %new_self.id, "reconnected with a new peer id; rebuilding mesh");
+                self.rebuild_for_reconnect(peers, &new_self.id).await?;
+            } else {
+                // Same id: just (re)join the listed peers.
+                let local_id = current_id.expect("mesh exists");
+                self.usernames = peers
+                    .iter()
+                    .filter(|p| p.id != local_id)
+                    .map(|p| (p.id.clone(), p.username.clone()))
+                    .collect();
+                let mesh = self.mesh.as_mut().expect("mesh exists");
+                for peer in peers.iter().filter(|p| p.id != local_id) {
+                    mesh.handle_peer_joined(peer.clone()).await?;
+                }
             }
-            let _ = new_self;
             return Ok(true);
         }
 
@@ -754,6 +886,15 @@ impl App {
         }
     }
 
+    /// Applies an outbound audio event to the UI (speaking ring).
+    fn handle_audio_event(&self, ev: AudioEvent) {
+        match ev {
+            AudioEvent::Speaking { peer, speaking } => {
+                self.set_peer_tile_speaking(&peer, speaking);
+            }
+        }
+    }
+
     // --- UI helpers (all mutate models on the UI thread) ---------------------
 
     fn add_peer_tile(&self, id: String, username: String, initial: String) {
@@ -791,6 +932,18 @@ impl App {
         });
     }
 
+    fn clear_peer_tiles(&self) {
+        let window = self.window.clone();
+        let _ = window.upgrade_in_event_loop(move |w| {
+            if let Some(peers) = w.get_peers().as_any().downcast_ref::<VecModel<PeerData>>() {
+                while peers.row_count() > 0 {
+                    peers.remove(peers.row_count() - 1);
+                }
+                w.set_peer_count(0);
+            }
+        });
+    }
+
     fn set_peer_tile_muted(&self, id: &str, muted: bool) {
         let window = self.window.clone();
         let id = id.to_owned();
@@ -800,6 +953,23 @@ impl App {
                     if let Some(mut p) = peers.row_data(i) {
                         if p.id.as_str() == id {
                             p.is_muted = muted;
+                            peers.set_row_data(i, p);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn set_peer_tile_speaking(&self, id: &str, speaking: bool) {
+        let window = self.window.clone();
+        let id = id.to_owned();
+        let _ = window.upgrade_in_event_loop(move |w| {
+            if let Some(peers) = w.get_peers().as_any().downcast_ref::<VecModel<PeerData>>() {
+                for i in 0..peers.row_count() {
+                    if let Some(mut p) = peers.row_data(i) {
+                        if p.id.as_str() == id {
+                            p.is_speaking = speaking;
                             peers.set_row_data(i, p);
                         }
                     }
