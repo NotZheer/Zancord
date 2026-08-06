@@ -25,7 +25,26 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "target/release/$BIN_NAME" "$APP_DIR/Contents/MacOS/$BIN_NAME"
 cp resources/macos/Info.plist "$APP_DIR/Contents/Info.plist"
 
-# Icons: resources/icons/icon.icns (or iconset) if present — none ship yet.
+# Some macOS installs (e.g. this dev VM) lack the Swift Concurrency runtime in
+# the dyld cache, so the binary's @rpath/libswift_Concurrency.dylib fails to
+# resolve at launch. Bundle the dylib and point the rpath at it.
+SWIFT_RUNTIME=""
+for d in \
+    "/Library/Developer/CommandLineTools/usr/lib/swift-5.5/macosx" \
+    "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx"; do
+    if [ -f "$d/libswift_Concurrency.dylib" ]; then
+        SWIFT_RUNTIME="$d"
+        break
+    fi
+done
+if [ -n "$SWIFT_RUNTIME" ]; then
+    mkdir -p "$APP_DIR/Contents/Frameworks"
+    cp "$SWIFT_RUNTIME/libswift_Concurrency.dylib" "$APP_DIR/Contents/Frameworks/"
+    install_name_tool -add_rpath @executable_path/../Frameworks \
+        "$APP_DIR/Contents/MacOS/$BIN_NAME" 2>/dev/null || true
+fi
+
+# Icons: resources/icons/*.icns (or iconset) if present — none ship yet.
 if [ -f resources/icons/icon.icns ]; then
     cp resources/icons/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
 fi
