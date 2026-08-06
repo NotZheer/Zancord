@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS, MIME_TYPE_VP8};
+use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
@@ -83,10 +83,13 @@ impl TrackKind {
                 rtcp_feedback: vec![],
             },
             TrackKind::Screen => RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_VP8.to_owned(),
+                // The screen pipeline encodes H.264 (see screen_share.rs) — the
+                // track MUST advertise the same codec or the RTP payloads are
+                // unreadable on the receiving side.
+                mime_type: MIME_TYPE_H264.to_owned(),
                 clock_rate: 90_000,
                 channels: 0,
-                sdp_fmtp_line: String::new(),
+                sdp_fmtp_line: H264_FMTP.to_owned(),
                 rtcp_feedback: vec![],
             },
         }

@@ -405,7 +405,7 @@ mod tests {
         );
         assert_eq!(
             TrackKind::Screen.codec().mime_type.to_lowercase(),
-            "video/vp8"
+            "video/h264"
         );
     }
 
