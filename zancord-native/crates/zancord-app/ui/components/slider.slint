@@ -1,0 +1,65 @@
+// ZSlider (Phase 6): minimal custom slider — track + fill + handle, drag or
+// click to set. Styled via Theme; used by the settings popover (noise-gate
+// threshold) and the per-peer volume control. Emits `changed` while the user
+// drags; it does not write its own `value` (the parent owns the state).
+
+import { Theme } from "../theme.slint";
+
+export component ZSlider inherits Rectangle {
+    in property <float> value: 0.5;
+    in property <float> min: 0.0;
+    in property <float> max: 1.0;
+    callback changed(float);
+
+    height: 24px;
+    width: 100%;
+
+    private property <float> drag_value: root.min + (touch.mouse-x / touch.width) * (root.max - root.min);
+
+    function normalized() -> float {
+        if root.max == root.min { return 0.0; }
+        return (root.value - root.min) / (root.max - root.min);
+    }
+
+    // Track.
+    Rectangle {
+        y: (parent.height - 4px) / 2;
+        height: 4px;
+        width: 100%;
+        border-radius: 2px;
+        background: Theme.bg-secondary;
+        // Fill up to the current value.
+        Rectangle {
+            width: (parent.width * root.normalized()).clamp(0px, parent.width);
+            height: 100%;
+            border-radius: 2px;
+            background: Theme.accent;
+        }
+    }
+
+    // Handle.
+    Rectangle {
+        x: (parent.width * root.normalized() - 6px).clamp(0px, parent.width - 12px);
+        y: (parent.height - 12px) / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: touch.pressed ? Theme.accent-hover : Theme.text-primary;
+    }
+
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        moved => {
+            if touch.width > 0px {
+                root.changed(root.drag_value.clamp(root.min, root.max));
+            }
+        }
+        clicked => {
+            if touch.width > 0px {
+                root.changed(root.drag_value.clamp(root.min, root.max));
+            }
+        }
+    }
+}

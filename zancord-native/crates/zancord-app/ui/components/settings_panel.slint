@@ -1,0 +1,131 @@
+// SettingsPanel (Phase 6): noise gate (toggle + threshold), high-pass filter,
+// and live mic/output device selection. All changes apply immediately via the
+// audio pipeline controls.
+
+import { Theme } from "../theme.slint";
+import { ZSlider } from "slider.slint";
+import { Toggle } from "toggle.slint";
+import { DevicePicker } from "device_picker.slint";
+
+export component SettingsPanel inherits Rectangle {
+    in property <bool> noise_gate_enabled;
+    in property <float> noise_gate_threshold_db;
+    in property <bool> hpf_enabled;
+    in property <[string]> input_devices;
+    in property <string> current_input_device;
+    in property <[string]> output_devices;
+    in property <string> current_output_device;
+
+    callback toggle_noise_gate();
+    callback set_noise_gate_threshold(float);
+    callback toggle_hpf();
+    callback select_input_device(int);
+    callback select_output_device(int);
+
+    // Local slider state (seeded from the input property; the slider emits
+    // changes without writing its `value` back).
+    property <float> threshold_db: -40.0;
+    init => { self.threshold_db = root.noise_gate_threshold_db; }
+
+    width: 320px;
+    border-radius: Theme.radius-md;
+    background: Theme.bg-surface;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-sm;
+
+        Text {
+            text: "Audio settings";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+        }
+
+        // Noise gate: toggle + threshold slider (visible while enabled).
+        Rectangle {
+            width: 100%;
+            HorizontalLayout {
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "Noise gate";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Toggle {
+                    active: root.noise_gate_enabled;
+                    clicked => { root.toggle_noise_gate(); }
+                }
+            }
+        }
+        if root.noise_gate_enabled: Rectangle {
+            width: 100%;
+            HorizontalLayout {
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "Threshold";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                    vertical-alignment: center;
+                }
+                ZSlider {
+                    value: (root.threshold_db - -60.0) / 40.0;
+                    changed(v) => {
+                        root.threshold_db = v * 40.0 - 60.0;
+                        root.set_noise_gate_threshold(root.threshold_db);
+                    }
+                }
+                Text {
+                    text: Math.round(root.threshold_db);
+                    color: Theme.text-primary;
+                    font-size: Theme.font-size-sm;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // High-pass filter.
+        Rectangle {
+            width: 100%;
+            HorizontalLayout {
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "High-pass filter";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Toggle {
+                    active: root.hpf_enabled;
+                    clicked => { root.toggle_hpf(); }
+                }
+            }
+        }
+
+        Text {
+            text: "Microphone";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+        }
+        DevicePicker {
+            devices: root.input_devices;
+            current: root.current_input_device;
+            selected(idx) => { root.select_input_device(idx); }
+        }
+
+        Text {
+            text: "Output";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+        }
+        DevicePicker {
+            devices: root.output_devices;
+            current: root.current_output_device;
+            selected(idx) => { root.select_output_device(idx); }
+        }
+    }
+}

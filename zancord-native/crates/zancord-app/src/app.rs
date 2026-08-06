@@ -17,9 +17,12 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::{ChatMessage, MainWindow, PeerData, Toast};
+use zancord_audio::devices::AudioDevice;
 use zancord_audio::pipeline::{AudioControl, AudioEvent, AudioPipeline, PipelineConfig};
 use zancord_audio::IncomingAudioKind;
-use zancord_protocol::{EncodedAudioFrame, MediaStatePayload, PeerInfo, SignalMessage};
+use zancord_protocol::{
+    AudioProcessingConfig, EncodedAudioFrame, MediaStatePayload, PeerInfo, SignalMessage,
+};
 use zancord_signaling_client::SignalingClient;
 use zancord_transport::mesh::{IceState, MeshEvent, MeshManager};
 
@@ -38,6 +41,12 @@ enum UiCommand {
     ToggleChat,
     SelectCamera(u32),
     SelectScreenSource(usize),
+    ToggleNoiseGate,
+    SetNoiseGateThreshold(f32),
+    ToggleHpf,
+    SelectInputDevice(usize),
+    SelectOutputDevice(usize),
+    SetPeerVolume(String, f32),
 }
 
 pub struct App {
@@ -66,6 +75,13 @@ pub struct App {
     /// Enumerated capture sources (UI picker) + the saved choice (source id).
     screen_sources: Vec<zancord_capture::CaptureSource>,
     screen_source_id: Option<String>,
+    /// Audio device lists (settings UI) + the current selection.
+    input_devices: Vec<AudioDevice>,
+    output_devices: Vec<AudioDevice>,
+    input_device_id: Option<String>,
+    output_device_id: Option<String>,
+    /// Live audio-processing state (settings UI ↔ pipeline ↔ config).
+    processing: AudioProcessingConfig,
     cmd_tx: mpsc::Sender<UiCommand>,
 }
 
@@ -120,8 +136,8 @@ impl App {
         let (audio_event_tx, mut audio_event_rx) = mpsc::channel(64);
         let audio_handle = AudioPipeline::spawn(
             PipelineConfig::default(),
-            input_device,
-            output_device,
+            input_device.clone(),
+            output_device.clone(),
             mesh.audio_tx(),
             audio_in_rx,
             control_rx,
@@ -145,6 +161,15 @@ impl App {
             .screen_source_id
             .clone()
             .filter(|id| screen_sources.iter().any(|s| s.id == *id));
+        // Settings UI: device lists + live processing state from config.
+        let input_devices = zancord_audio::devices::list_input_devices().unwrap_or_default();
+        let output_devices = zancord_audio::devices::list_output_devices().unwrap_or_default();
+        let processing = AudioProcessingConfig {
+            hpf_enabled: config.hpf_enabled,
+            noise_gate_enabled: config.noise_gate_enabled,
+            noise_gate_threshold_db: config.noise_gate_threshold_db,
+            ..Default::default()
+        };
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel(64);
         let mut app = Self {
@@ -169,6 +194,11 @@ impl App {
             camera_index,
             screen_sources,
             screen_source_id,
+            input_devices,
+            output_devices,
+            input_device_id: input_device,
+            output_device_id: output_device,
+            processing,
             cmd_tx,
         };
 
@@ -265,6 +295,29 @@ impl App {
             .find(|s| Some(&s.id) == self.screen_source_id.as_ref())
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "Screen".into());
+        let input_names: Vec<slint::SharedString> = self
+            .input_devices
+            .iter()
+            .map(|d| d.name.as_str().into())
+            .collect();
+        let current_input = self
+            .input_devices
+            .iter()
+            .find(|d| Some(&d.id) == self.input_device_id.as_ref())
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| "Default".into());
+        let output_names: Vec<slint::SharedString> = self
+            .output_devices
+            .iter()
+            .map(|d| d.name.as_str().into())
+            .collect();
+        let current_output = self
+            .output_devices
+            .iter()
+            .find(|d| Some(&d.id) == self.output_device_id.as_ref())
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| "Default".into());
+        let processing = self.processing.clone();
         let _ = window.upgrade_in_event_loop(move |w| {
             w.set_room_name(room.into());
             // Seed the models with empty VecModels so later mutations can
@@ -276,6 +329,13 @@ impl App {
             w.set_current_camera_name(current_camera.into());
             w.set_screen_sources(ModelRc::new(VecModel::from(screen_names)));
             w.set_current_screen_source_name(current_screen.into());
+            w.set_input_devices(ModelRc::new(VecModel::from(input_names)));
+            w.set_current_input_device(current_input.into());
+            w.set_output_devices(ModelRc::new(VecModel::from(output_names)));
+            w.set_current_output_device(current_output.into());
+            w.set_noise_gate_enabled(processing.noise_gate_enabled);
+            w.set_noise_gate_threshold_db(processing.noise_gate_threshold_db);
+            w.set_hpf_enabled(processing.hpf_enabled);
 
             w.set_peer_count(0);
             w.set_mic_enabled(true);
@@ -339,6 +399,30 @@ impl App {
                     // Resolved against the live source list in the handler
                     // (the list can change after screen-recording permission).
                     let _ = c.try_send(UiCommand::SelectScreenSource(index as usize));
+                });
+                let c = base.clone();
+                w.on_toggle_noise_gate(move || {
+                    let _ = c.try_send(UiCommand::ToggleNoiseGate);
+                });
+                let c = base.clone();
+                w.on_set_noise_gate_threshold(move |db| {
+                    let _ = c.try_send(UiCommand::SetNoiseGateThreshold(db));
+                });
+                let c = base.clone();
+                w.on_toggle_hpf(move || {
+                    let _ = c.try_send(UiCommand::ToggleHpf);
+                });
+                let c = base.clone();
+                w.on_select_input_device(move |index| {
+                    let _ = c.try_send(UiCommand::SelectInputDevice(index as usize));
+                });
+                let c = base.clone();
+                w.on_select_output_device(move |index| {
+                    let _ = c.try_send(UiCommand::SelectOutputDevice(index as usize));
+                });
+                let c = base.clone();
+                w.on_set_peer_volume(move |peer, volume| {
+                    let _ = c.try_send(UiCommand::SetPeerVolume(peer.to_string(), volume));
                 });
             })
             .map_err(|_| anyhow::anyhow!("window dropped before callbacks wired"))?;
@@ -449,9 +533,11 @@ impl App {
                     }
                 } else if let Some(mut session) = self.screen_share.take() {
                     session.stop();
+                    let camera_on = self.local_state.camera_enabled;
                     let window = self.window.clone();
-                    let _ = window.upgrade_in_event_loop(|w| {
-                        w.set_local_has_video(false);
+                    let _ = window.upgrade_in_event_loop(move |w| {
+                        // Keep the camera preview when the camera is still on.
+                        w.set_local_has_video(camera_on);
                     });
                 }
                 let window = self.window.clone();
@@ -555,6 +641,71 @@ impl App {
                     w.set_current_screen_source_name(source.name.into());
                 });
             }
+            UiCommand::ToggleNoiseGate => {
+                self.processing.noise_gate_enabled = !self.processing.noise_gate_enabled;
+                self.apply_processing();
+            }
+            UiCommand::SetNoiseGateThreshold(db) => {
+                let db = db.clamp(-60.0, -20.0);
+                // Sliders stream events; apply + persist only on real moves.
+                if (self.processing.noise_gate_threshold_db - db).abs() < 0.5 {
+                    return Ok(true);
+                }
+                self.processing.noise_gate_threshold_db = db;
+                self.apply_processing();
+            }
+            UiCommand::ToggleHpf => {
+                self.processing.hpf_enabled = !self.processing.hpf_enabled;
+                self.apply_processing();
+            }
+            UiCommand::SelectInputDevice(index) => {
+                let Some(device) = self.input_devices.get(index).cloned() else {
+                    return Ok(true);
+                };
+                self.input_device_id = Some(device.id.clone());
+                let mut config = crate::config::AppConfig::load();
+                config.input_device = Some(device.id.clone());
+                if let Err(err) = config.save() {
+                    warn!(error = %err, "failed to save input device");
+                }
+                if let Some(tx) = &self.audio_control {
+                    let _ = tx.send(AudioControl::SetInputDevice(Some(device.id))).await;
+                }
+                let window = self.window.clone();
+                let _ = window.upgrade_in_event_loop(move |w| {
+                    w.set_current_input_device(device.name.into());
+                });
+            }
+            UiCommand::SelectOutputDevice(index) => {
+                let Some(device) = self.output_devices.get(index).cloned() else {
+                    return Ok(true);
+                };
+                self.output_device_id = Some(device.id.clone());
+                let mut config = crate::config::AppConfig::load();
+                config.output_device = Some(device.id.clone());
+                if let Err(err) = config.save() {
+                    warn!(error = %err, "failed to save output device");
+                }
+                if let Some(tx) = &self.audio_control {
+                    let _ = tx
+                        .send(AudioControl::SetOutputDevice(Some(device.id)))
+                        .await;
+                }
+                let window = self.window.clone();
+                let _ = window.upgrade_in_event_loop(move |w| {
+                    w.set_current_output_device(device.name.into());
+                });
+            }
+            UiCommand::SetPeerVolume(peer, volume) => {
+                if let Some(tx) = &self.audio_control {
+                    let _ = tx
+                        .send(AudioControl::SetPeerVolume {
+                            peer,
+                            volume: volume.clamp(0.0, 2.0),
+                        })
+                        .await;
+                }
+            }
             UiCommand::ToggleChat => {
                 let window = self.window.clone();
                 let _ = window.upgrade_in_event_loop(|w| {
@@ -563,6 +714,28 @@ impl App {
             }
         }
         Ok(true)
+    }
+
+    /// Pushes the current processing config to the pipeline, persists it, and
+    /// syncs the settings UI.
+    fn apply_processing(&self) {
+        if let Some(tx) = &self.audio_control {
+            let _ = tx.try_send(AudioControl::SetProcessing(self.processing.clone()));
+        }
+        let mut config = crate::config::AppConfig::load();
+        config.noise_gate_enabled = self.processing.noise_gate_enabled;
+        config.noise_gate_threshold_db = self.processing.noise_gate_threshold_db;
+        config.hpf_enabled = self.processing.hpf_enabled;
+        if let Err(err) = config.save() {
+            warn!(error = %err, "failed to save processing settings");
+        }
+        let processing = self.processing.clone();
+        let window = self.window.clone();
+        let _ = window.upgrade_in_event_loop(move |w| {
+            w.set_noise_gate_enabled(processing.noise_gate_enabled);
+            w.set_noise_gate_threshold_db(processing.noise_gate_threshold_db);
+            w.set_hpf_enabled(processing.hpf_enabled);
+        });
     }
 
     /// Starts the capture session for `camera_index`. On failure the mesh

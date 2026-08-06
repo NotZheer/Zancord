@@ -79,6 +79,10 @@ pub enum AudioControl {
         deafened: bool,
     },
     SetProcessing(AudioProcessingConfig),
+    /// Reopen the capture/playback device (cpal streams are thread-bound, so
+    /// switches happen inside the audio thread; `None` reverts to the default).
+    SetInputDevice(Option<String>),
+    SetOutputDevice(Option<String>),
     /// Swap the transport sender (the mesh was rebuilt after a signaling
     /// reconnect assigned a new peer id).
     SetMeshSender(Sender<EncodedAudioFrame>),
@@ -140,6 +144,10 @@ pub struct AudioPipeline {
     event_tx: Sender<AudioEvent>,
     /// Per-peer voice-activity state (hysteresis, so rings don't flap).
     speaking: HashMap<PeerId, bool>,
+    /// Device management for live device switching (see `switch_input_device`).
+    devices: crate::devices::DeviceManager,
+    input_device_id: Option<String>,
+    output_device_id: Option<String>,
     config: PipelineConfig,
     sequence: u64,
     started_at: Instant,
@@ -197,6 +205,9 @@ impl AudioPipeline {
             control_rx,
             event_tx,
             speaking: HashMap::new(),
+            devices: crate::devices::DeviceManager::new(),
+            input_device_id: None,
+            output_device_id: None,
             config,
             sequence: 0,
             started_at: Instant::now(),
@@ -257,8 +268,8 @@ impl AudioPipeline {
     ) -> Result<()> {
         let mut devices = devices::DeviceManager::new();
         let capture = match input_device_id {
-            Some(id) => {
-                devices.set_input_device(&id)?;
+            Some(ref id) => {
+                devices.set_input_device(id)?;
                 let device = devices.input_device()?;
                 let capture = MicCapture::open(&device, config.capture_ring_capacity)?;
                 tracing::info!(
@@ -273,8 +284,8 @@ impl AudioPipeline {
             None => None,
         };
         let playback = match output_device_id {
-            Some(id) => {
-                devices.set_output_device(&id)?;
+            Some(ref id) => {
+                devices.set_output_device(id)?;
                 let device = devices.output_device()?;
                 let playback = Playback::open(&device, config.playback_ring_capacity)?;
                 tracing::info!(
@@ -289,6 +300,9 @@ impl AudioPipeline {
             None => None,
         };
         let mut pipeline = Self::with_io(capture, playback, config, tx, rx, control_rx, event_tx)?;
+        pipeline.devices = devices;
+        pipeline.input_device_id = input_device_id;
+        pipeline.output_device_id = output_device_id;
         pipeline.run_loop();
         Ok(())
     }
@@ -404,6 +418,16 @@ impl AudioPipeline {
                     self.gate.set_enabled(config.noise_gate_enabled);
                     self.gate.set_threshold_db(config.noise_gate_threshold_db);
                     self.config.processing = config;
+                }
+                AudioControl::SetInputDevice(id) => {
+                    if let Err(err) = self.switch_input_device(id) {
+                        tracing::warn!(target: "zancord_audio", error = %err, "input device switch failed");
+                    }
+                }
+                AudioControl::SetOutputDevice(id) => {
+                    if let Err(err) = self.switch_output_device(id) {
+                        tracing::warn!(target: "zancord_audio", error = %err, "output device switch failed");
+                    }
                 }
                 AudioControl::SetMeshSender(tx) => {
                     self.tx = tx;
@@ -536,9 +560,6 @@ impl AudioPipeline {
     /// peer would be pure churn).
     fn update_vad(&mut self, peer: &PeerId, db: f32) {
         let was = self.speaking.get(peer).copied().unwrap_or(false);
-        if std::env::var("ZANCORD_VAD_DEBUG").is_ok() {
-            eprintln!("VAD: peer={peer} db={db} was={was}");
-        }
         let now = db > VAD_ON_DB || (was && db > VAD_OFF_DB);
         if now != was {
             self.speaking.insert(peer.clone(), now);
@@ -547,6 +568,72 @@ impl AudioPipeline {
                 speaking: now,
             });
         }
+    }
+
+    /// Reopens the capture device; `None` reverts to the host default. The new
+    /// stream opens BEFORE the old one is dropped, so a bad device id keeps
+    /// the current capture running.
+    fn switch_input_device(&mut self, id: Option<String>) -> crate::error::Result<()> {
+        if self.input_device_id == id {
+            return Ok(());
+        }
+        let opened = match &id {
+            Some(id) => {
+                self.devices.set_input_device(id)?;
+                let device = self.devices.input_device()?;
+                let capture = MicCapture::open(&device, self.config.capture_ring_capacity)?;
+                let resampler =
+                    CaptureResampler::new(capture.sample_rate(), usize::from(capture.channels()))?;
+                tracing::info!(
+                    target: "zancord_audio",
+                    device = %id,
+                    rate = capture.sample_rate(),
+                    channels = capture.channels(),
+                    "mic device switched"
+                );
+                Some((capture, resampler))
+            }
+            None => None,
+        };
+        let (capture, resampler) = match opened {
+            Some((capture, resampler)) => (Some(capture), Some(resampler)),
+            None => (None, None),
+        };
+        self.capture = capture;
+        self.capture_resampler = resampler;
+        self.input_device_id = id;
+        Ok(())
+    }
+
+    /// Reopens the playback device (same fail-safe semantics as the input).
+    fn switch_output_device(&mut self, id: Option<String>) -> crate::error::Result<()> {
+        if self.output_device_id == id {
+            return Ok(());
+        }
+        let opened = match &id {
+            Some(id) => {
+                self.devices.set_output_device(id)?;
+                let device = self.devices.output_device()?;
+                let playback = Playback::open(&device, self.config.playback_ring_capacity)?;
+                let resampler = PlaybackResampler::new(playback.sample_rate())?;
+                tracing::info!(
+                    target: "zancord_audio",
+                    device = %id,
+                    rate = playback.sample_rate(),
+                    "output device switched"
+                );
+                Some((playback, resampler))
+            }
+            None => None,
+        };
+        let (playback, resampler) = match opened {
+            Some((playback, resampler)) => (Some(playback), Some(resampler)),
+            None => (None, None),
+        };
+        self.playback = playback;
+        self.playback_resampler = resampler;
+        self.output_device_id = id;
+        Ok(())
     }
 
     fn flush_mix(&mut self, summary: &mut TickSummary) -> Result<()> {

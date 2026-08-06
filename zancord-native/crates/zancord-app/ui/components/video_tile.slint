@@ -2,6 +2,7 @@
 // overlay, muted indicator, screen-share badge, and a speaking ring.
 
 import { Theme } from "../theme.slint";
+import { ZSlider } from "slider.slint";
 
 export component VideoTile inherits Rectangle {
     in property <string> username;
@@ -12,6 +13,13 @@ export component VideoTile inherits Rectangle {
     in property <bool> has_video;
     in property <bool> is_screen_share;
     in property <string> connection_state;
+    in property <string> peer_id;
+    in property <float> volume: 1.0;
+    property <bool> volume_visible: false;
+    // Local slider state (seeded from `volume`).
+    property <float> vol: 1.0;
+    init => { self.vol = root.volume; }
+    callback volume_changed(string, float);
 
     function connection_color(state: string) -> color {
         if state == "connected" { return Theme.success; }
@@ -93,6 +101,52 @@ export component VideoTile inherits Rectangle {
             }
             Text {
                 text: root.is_screen_share ? "🖥️" : "";
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            // Per-peer volume control (opens a mini slider).
+            Text {
+                text: "🔊";
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+                vol_touch := TouchArea {
+                    clicked => { root.volume_visible = !root.volume_visible; }
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+    }
+
+    // Volume popover: free-positioned above the overlay (not in a layout).
+    if root.volume_visible: Rectangle {
+        x: (parent.width - 150px) / 2;
+        y: parent.height - 90px;
+        width: 150px;
+        height: 36px;
+        border-radius: Theme.radius-sm;
+        background: Theme.bg-surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        HorizontalLayout {
+            padding: Theme.spacing-xs;
+            spacing: Theme.spacing-xs;
+            Text {
+                text: "🔊";
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            ZSlider {
+                value: root.vol;
+                min: 0.0;
+                max: 2.0;
+                changed(v) => {
+                    root.vol = v;
+                    root.volume_changed(root.peer_id, v);
+                }
+            }
+            Text {
+                text: Math.round(root.vol * 100.0);
+                color: Theme.text-primary;
                 font-size: Theme.font-size-sm;
                 vertical-alignment: center;
             }

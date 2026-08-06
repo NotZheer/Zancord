@@ -30,7 +30,7 @@ These decisions are FINAL. Do not deviate without explicit user approval.
 | **Audio I/O** | cpal + `rtrb` (lock-free SPSC) | Real-time callback rules strictly enforced |
 | **Audio Codec** | Opus (48kHz mono, 20ms frames, FEC) | `opus` crate |
 | **Audio Processing** | Biquad HPF (80Hz) + noise gate | Ported from PWA Web Audio pipeline |
-| **Video Codecs** | H.264 (openh264) + VP8 (vpx) | Encoder/decoder abstraction in `zancord-video` |
+| **Video Codecs** | H.264 (openh264) | Encoder/decoder abstraction in `zancord-video`. VP8 was planned but the vpx crate's interfaces are unusable — H.264-only is fine for a self-hosted mesh (both ends are this app) |
 | **Screen Capture** | macOS ScreenCaptureKit / Linux PipeWire+XDG portal | Per-platform `#[cfg]` modules |
 | **Camera** | nokhwa (or eye) | Cross-platform webcam capture |
 | **Logging** | `tracing` + `tracing-subscriber` | Structured spans, env-filter |

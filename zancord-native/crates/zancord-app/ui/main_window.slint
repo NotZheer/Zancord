@@ -7,12 +7,8 @@ import { ControlDock } from "components/control_dock.slint";
 import { ChatPanel } from "components/chat_panel.slint";
 import { ToastCard } from "components/toast.slint";
 
-import { Theme } from "theme.slint";
-import { VideoTile } from "components/video_tile.slint";
-import { ControlDock } from "components/control_dock.slint";
-import { ChatPanel } from "components/chat_panel.slint";
-import { ToastCard } from "components/toast.slint";
 import { PeerData, ChatMessage, Toast } from "types.slint";
+import { SettingsPanel } from "components/settings_panel.slint";
 
 export component MainWindow inherits Window {
     title: "Zancord";
@@ -40,6 +36,15 @@ export component MainWindow inherits Window {
     in property <[string]> screen_sources;
     in property <string> current_screen_source_name;
     property <bool> screen_picker_visible: false;
+    // Settings popover (top bar).
+    in property <bool> noise_gate_enabled;
+    in property <float> noise_gate_threshold_db;
+    in property <bool> hpf_enabled;
+    in property <[string]> input_devices;
+    in property <string> current_input_device;
+    in property <[string]> output_devices;
+    in property <string> current_output_device;
+    property <bool> settings_visible: false;
     in-out property <bool> chat_visible: true;
 
     // Chat + toasts.
@@ -57,6 +62,12 @@ export component MainWindow inherits Window {
     callback toggle_chat();
     callback camera_selected(int);
     callback screen_source_selected(int);
+    callback toggle_noise_gate();
+    callback set_noise_gate_threshold(float);
+    callback toggle_hpf();
+    callback select_input_device(int);
+    callback select_output_device(int);
+    callback set_peer_volume(string, float);
 
     background: Theme.bg-primary;
 
@@ -217,6 +228,37 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    // Settings popover (⚙️): audio processing + devices.
+                    Rectangle {
+                        Text {
+                            text: "⚙️";
+                            color: Theme.text-primary;
+                            font-size: Theme.font-size-lg;
+                        }
+                        set_touch := TouchArea {
+                            clicked => { root.settings_visible = !root.settings_visible; }
+                            mouse-cursor: pointer;
+                        }
+                        states [
+                            hover when set_touch.has-hover: { background: Theme.bg-secondary; }
+                        ]
+                        if root.settings_visible: SettingsPanel {
+                            x: -290px;
+                            y: 44px;
+                            noise_gate_enabled: root.noise_gate_enabled;
+                            noise_gate_threshold_db: root.noise_gate_threshold_db;
+                            hpf_enabled: root.hpf_enabled;
+                            input_devices: root.input_devices;
+                            current_input_device: root.current_input_device;
+                            output_devices: root.output_devices;
+                            current_output_device: root.current_output_device;
+                            toggle_noise_gate => { root.toggle_noise_gate(); }
+                            set_noise_gate_threshold(v) => { root.set_noise_gate_threshold(v); }
+                            toggle_hpf => { root.toggle_hpf(); }
+                            select_input_device(idx) => { root.select_input_device(idx); }
+                            select_output_device(idx) => { root.select_output_device(idx); }
+                        }
+                    }
                     Rectangle {
                         Text {
                             text: "💬";
@@ -273,6 +315,8 @@ export component MainWindow inherits Window {
                             has_video: p.has_video;
                             is_screen_share: p.is_screen_share;
                             connection_state: p.connection_state;
+                            peer_id: p.id;
+                            volume_changed(id, v) => { root.set_peer_volume(id, v); }
                         }
                     }
                 }

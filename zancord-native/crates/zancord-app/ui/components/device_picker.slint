@@ -1,0 +1,70 @@
+// DevicePicker (Phase 6): a dropdown showing the current device with a list
+// of alternatives (mic / output selection in the settings panel).
+
+import { Theme } from "../theme.slint";
+
+export component DevicePicker inherits Rectangle {
+    in property <[string]> devices;
+    in property <string> current;
+    callback selected(int);
+    property <bool> open: false;
+
+    width: 100%;
+    height: 28px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.bg-secondary;
+
+    Text {
+        text: root.current;
+        color: Theme.text-primary;
+        font-size: Theme.font-size-sm;
+        overflow: elide;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => { root.open = !root.open; }
+        mouse-cursor: pointer;
+    }
+    states [
+        hover when touch.has-hover: { background: Theme.bg-surface; }
+    ]
+
+    if root.open: Rectangle {
+        y: 30px;
+        width: 100%;
+        border-radius: Theme.radius-md;
+        background: Theme.bg-surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        VerticalLayout {
+            padding: Theme.spacing-xs;
+            spacing: Theme.spacing-xs;
+            for d[idx] in root.devices: Rectangle {
+                width: 100%;
+                border-radius: Theme.radius-sm;
+                Text {
+                    text: d;
+                    color: Theme.text-primary;
+                    font-size: Theme.font-size-sm;
+                    overflow: elide;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                pick := TouchArea {
+                    clicked => {
+                        root.selected(idx);
+                        root.open = false;
+                    }
+                    mouse-cursor: pointer;
+                }
+                states [
+                    hover when pick.has-hover: { background: Theme.bg-secondary; }
+                ]
+            }
+        }
+    }
+}

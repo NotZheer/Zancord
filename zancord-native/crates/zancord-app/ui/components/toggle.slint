@@ -1,0 +1,29 @@
+// Toggle (Phase 6): small on/off switch used by the settings panel.
+
+import { Theme } from "../theme.slint";
+
+export component Toggle inherits Rectangle {
+    in property <bool> active: false;
+    callback clicked();
+
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: root.active ? Theme.accent : Theme.bg-secondary;
+    animate background { duration: 120ms; }
+
+    Rectangle {
+        x: root.active ? parent.width - 18px : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: Theme.text-primary;
+        animate x { duration: 120ms; }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+}
