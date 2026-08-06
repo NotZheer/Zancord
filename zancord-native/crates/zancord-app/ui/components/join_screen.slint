@@ -1,0 +1,162 @@
+// Join screen (Phase 6): signaling endpoint / room / display-name entry shown
+// before the call view. Replaces the CLI-arg-only launch flow while keeping
+// `zancord-ui <ws> <room> <name>` working for scripts (auto-join skips this).
+
+import { Theme } from "../theme.slint";
+
+export component JoinScreen inherits Rectangle {
+    in property <string> endpoint;
+    in property <string> room;
+    in property <string> username;
+    // Non-empty shows as an error banner (join failures from Rust).
+    in property <string> error;
+    callback join_clicked(string, string, string);
+
+    background: Theme.bg-primary;
+
+    property <bool> ready:
+        !root.endpoint.is_empty && !root.room.is_empty && !root.username.is_empty;
+
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 440px;
+                border-radius: Theme.radius-lg;
+                background: Theme.bg-surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                VerticalLayout {
+                    padding: Theme.spacing-lg;
+                    spacing: Theme.spacing-md;
+
+                    Text {
+                        text: "Zancord";
+                        color: Theme.text-primary;
+                        font-size: 32px;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "Peer-to-peer voice, video & screen share over Tailscale";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-size-sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "Signaling server";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-size-sm;
+                    }
+                    Rectangle {
+                        height: 40px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.bg-secondary;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-sm;
+                            padding-right: Theme.spacing-sm;
+                            endpoint_input := TextInput {
+                                horizontal-stretch: 1;
+                                vertical-stretch: 1;
+                                text: root.endpoint;
+                                color: Theme.text-primary;
+                                font-size: Theme.font-size-md;
+                                accepted => { root.try_join(); }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "Room";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-size-sm;
+                    }
+                    Rectangle {
+                        height: 40px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.bg-secondary;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-sm;
+                            padding-right: Theme.spacing-sm;
+                            room_input := TextInput {
+                                horizontal-stretch: 1;
+                                vertical-stretch: 1;
+                                text: root.room;
+                                color: Theme.text-primary;
+                                font-size: Theme.font-size-md;
+                                accepted => { root.try_join(); }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "Display name";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-size-sm;
+                    }
+                    Rectangle {
+                        height: 40px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.bg-secondary;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-sm;
+                            padding-right: Theme.spacing-sm;
+                            name_input := TextInput {
+                                horizontal-stretch: 1;
+                                vertical-stretch: 1;
+                                text: root.username;
+                                color: Theme.text-primary;
+                                font-size: Theme.font-size-md;
+                                accepted => { root.try_join(); }
+                            }
+                        }
+                    }
+
+                    if root.error != "": Text {
+                        text: root.error;
+                        color: Theme.error;
+                        font-size: Theme.font-size-sm;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle {
+                        height: 44px;
+                        border-radius: Theme.radius-md;
+                        background: root.ready ? Theme.accent : Theme.bg-secondary;
+                        join_touch := TouchArea {
+                            enabled: root.ready;
+                            clicked => { root.try_join(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text {
+                            text: "Join";
+                            color: Theme.text-primary;
+                            font-size: Theme.font-size-lg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        states [
+                            hover when join_touch.has-hover && root.ready: { background: Theme.accent-hover; }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    function try_join() {
+        if root.ready {
+            root.join_clicked(root.endpoint, root.room, root.username);
+        }
+    }
+}

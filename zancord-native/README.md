@@ -16,7 +16,7 @@ screen sharing — implemented in Rust with a Slint UI. Full-mesh P2P over Tails
 | 3 | Capture + video | ✅ screen (SCK/PipeWire/DDA), camera (nokhwa), H.264 |
 | 4 | Slint UI | ✅ |
 | 5 | Full integration | 🟡 5.1 screen share E2E ✅; 5.2 camera E2E code-complete, awaiting on-device verification |
-| 6 | Polish & parity | ⬜ |
+| 6 | Polish & parity | 🟡 join screen (Phase 6), macOS bundle + Linux install scripts ✅; on-device camera/SCK verification pending |
 
 ## Workspace
 
@@ -37,9 +37,12 @@ crates/
 ```bash
 cargo check --workspace
 cargo run -p zancord-signaling-server   # signaling server on :3000 (TLS :3443 if certs present)
-cargo run -p zancord-app --release      # the app (media-heavy, use release)
+cargo run -p zancord-ui --release       # desktop UI (no args → join screen; or <ws> <room> <name>)
+cargo run -p zancord-app --release      # CLI voice-call harness (Phases 2/3 verification)
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
+scripts/package-macos.sh                # signed Zancord.app bundle
+scripts/package-linux.sh                # user install (binary + .desktop)
 ```
 
 macOS screen capture requires signing: `codesign --force --sign - target/release/zancord-app`

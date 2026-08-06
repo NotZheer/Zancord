@@ -9,6 +9,7 @@ import { ToastCard } from "components/toast.slint";
 
 import { PeerData, ChatMessage, Toast } from "types.slint";
 import { SettingsPanel } from "components/settings_panel.slint";
+import { JoinScreen } from "components/join_screen.slint";
 
 export component MainWindow inherits Window {
     title: "Zancord";
@@ -47,11 +48,19 @@ export component MainWindow inherits Window {
     property <bool> settings_visible: false;
     in-out property <bool> chat_visible: true;
 
+    // Join screen (shown until the user joins a room).
+    in-out property <bool> in_call: false;
+    in property <string> join_endpoint;
+    in property <string> join_room;
+    in property <string> join_username;
+    in property <string> join_error;
+
     // Chat + toasts.
     in property <[ChatMessage]> chat_messages;
     in property <[Toast]> toasts;
 
     // Callbacks to Rust.
+    callback join_clicked(string, string, string);
     callback toggle_mic();
     callback toggle_camera();
     callback toggle_screen_share();
@@ -71,7 +80,20 @@ export component MainWindow inherits Window {
 
     background: Theme.bg-primary;
 
-    Rectangle {
+    if !root.in_call: JoinScreen {
+        width: 100%;
+        height: 100%;
+        endpoint: root.join_endpoint;
+        room: root.join_room;
+        username: root.join_username;
+        error: root.join_error;
+        join_clicked(endpoint, room, username) => {
+            root.in_call = true;
+            root.join_clicked(endpoint, room, username);
+        }
+    }
+
+    if root.in_call: Rectangle {
         width: 100%;
         height: 100%;
         background: Theme.bg-primary;
@@ -373,10 +395,11 @@ export component MainWindow inherits Window {
 
     // Keyboard shortcuts (Phase 4.9): Ctrl/Cmd + M/D/E, Ctrl+Shift+S.
     // While the chat input has focus, keys are consumed there instead.
+    // Ignored outside a call (the join screen owns the inputs then).
     FocusScope {
         init => { self.focus(); }
         key-pressed(event) => {
-            if (event.modifiers.control || event.modifiers.meta) {
+            if root.in_call && (event.modifiers.control || event.modifiers.meta) {
                 if (event.text.to_lowercase() == "m") { root.toggle_mic(); return accept; }
                 if (event.text.to_lowercase() == "d") { root.toggle_deafen(); return accept; }
                 if (event.text.to_lowercase() == "e") { root.toggle_camera(); return accept; }

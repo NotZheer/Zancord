@@ -97,6 +97,9 @@ impl App {
         input_device: Option<String>,
         output_device: Option<String>,
     ) -> anyhow::Result<()> {
+        // Enter the call view (the join screen is gone from here on).
+        let w = window.clone();
+        let _ = w.upgrade_in_event_loop(move |w| w.set_in_call(true));
         let endpoint = if ws_url.contains("/ws/") {
             ws_url
         } else {

@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct AppConfig {
     pub username: Option<String>,
+    /// Last signaling endpoint (ws://host:port) — prefills the join screen.
+    pub last_endpoint: Option<String>,
     pub last_room: Option<String>,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
@@ -30,6 +32,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             username: None,
+            last_endpoint: None,
             last_room: None,
             input_device: None,
             output_device: None,
@@ -101,6 +104,7 @@ mod tests {
         let path = dir.join("config.json");
         let config = AppConfig {
             username: Some("alice".into()),
+            last_endpoint: Some("ws://100.64.0.1:3000".into()),
             last_room: Some("zancord-room".into()),
             input_device: Some("hw:0".into()),
             output_device: Some("pulse".into()),
@@ -111,6 +115,10 @@ mod tests {
         config.save_to(&path).expect("saves");
         let loaded = AppConfig::load_from(&path);
         assert_eq!(loaded.username.as_deref(), Some("alice"));
+        assert_eq!(
+            loaded.last_endpoint.as_deref(),
+            Some("ws://100.64.0.1:3000")
+        );
         assert_eq!(loaded.last_room.as_deref(), Some("zancord-room"));
         assert_eq!(loaded.input_device.as_deref(), Some("hw:0"));
         assert_eq!(loaded.output_device.as_deref(), Some("pulse"));

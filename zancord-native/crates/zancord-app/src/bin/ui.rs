@@ -1,16 +1,24 @@
-//! Zancord desktop client (Phase 4.10): renders the Slint main window and
-//! hands control to the app orchestrator, which wires signaling, mesh, and
-//! audio to the UI.
+//! Zancord desktop client (Phase 4.10 / Phase 6): renders the Slint main
+//! window and hands control to the app orchestrator, which wires signaling,
+//! mesh, and audio to the UI.
 //!
-//! Usage: zancord-ui <ws-url> <room> <username> [--input <id>] [--output <id>]
+//! Launch modes:
+//! - No positional args: show the join screen (endpoint/room/display name,
+//!   prefilled from `config.json`).
+//! - `zancord-ui <ws-url> <room> <username>`: join immediately (scripts).
+//!
+//! Both accept `[--input <id>] [--output <id>]` device overrides.
+
+use std::sync::Arc;
 
 use anyhow::Context;
 use slint::ComponentHandle;
 
+use zancord_app::config::AppConfig;
 use zancord_app::MainWindow;
 
 fn usage() -> String {
-    "usage: zancord-ui <ws-url> <room> <username> [--input <id>] [--output <id>]".to_string()
+    "usage: zancord-ui [<ws-url> <room> <username>] [--input <id>] [--output <id>]".to_string()
 }
 
 #[derive(Default)]
@@ -49,14 +57,16 @@ fn parse_args() -> anyhow::Result<Args> {
         }
         i += 1;
     }
-    if args.ws_url.is_none() || args.room.is_none() || args.username.is_none() {
+    // Either all three join args, or none (join screen).
+    let positional = [&args.ws_url, &args.room, &args.username];
+    let count = positional.iter().filter(|v| v.is_some()).count();
+    if count != 0 && count != 3 {
         anyhow::bail!("{}", usage());
     }
     Ok(args)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -65,59 +75,123 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = parse_args()?;
+    let config = AppConfig::load();
 
-    // Persistent config: prefer CLI flags, fall back to saved preferences,
-    // then the host default devices.
-    let mut config = zancord_app::config::AppConfig::load();
-    let input_device = match args.input_device {
-        Some(id) => Some(id),
-        None => match config.input_device.clone() {
-            Some(id) => Some(id),
-            None => {
-                zancord_app::app::default_device(zancord_audio::devices::list_input_devices()?)
-            }
-        },
-    };
-    let output_device = match args.output_device {
-        Some(id) => Some(id),
-        None => match config.output_device.clone() {
-            Some(id) => Some(id),
-            None => {
-                zancord_app::app::default_device(zancord_audio::devices::list_output_devices()?)
-            }
-        },
-    };
-
-    let ws_url = args.ws_url.expect("parsed");
-    let room = args.room.expect("parsed");
-    let username = args.username.expect("parsed");
-
-    // Remember the last room/username for the next launch.
-    config.last_room = Some(room.clone());
-    config.username = Some(username.clone());
-    if let Err(err) = config.save() {
-        tracing::warn!(error = %err, "failed to save config");
-    }
+    // The orchestrator runs on this runtime (spawned per join); the UI thread
+    // runs the Slint event loop.
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("failed to build tokio runtime")?,
+    );
 
     let window = MainWindow::new()?;
-    let weak = window.as_weak();
+    window.set_join_endpoint(
+        args.ws_url
+            .clone()
+            .or_else(|| config.last_endpoint.clone())
+            .unwrap_or_else(|| "ws://127.0.0.1:3000".to_string())
+            .into(),
+    );
+    window.set_join_room(
+        args.room
+            .clone()
+            .or_else(|| config.last_room.clone())
+            .unwrap_or_else(|| "zancord-room".to_string())
+            .into(),
+    );
+    window.set_join_username(
+        args.username
+            .clone()
+            .or_else(|| config.username.clone())
+            .unwrap_or_default()
+            .into(),
+    );
 
-    // The orchestrator runs on a tokio worker; UI mutations hop back to the
-    // UI thread via `upgrade_in_event_loop`.
-    tokio::spawn(async move {
-        if let Err(err) = zancord_app::app::App::run(
-            weak,
-            ws_url,
-            room,
-            username,
-            input_device,
-            output_device,
-        )
-        .await
-        {
-            tracing::error!(error = %err, "app orchestrator exited with an error");
+    let join_window = window.clone_strong();
+    window.on_join_clicked(move |endpoint, room, username| {
+        // Guard against double-clicks (the UI flips to the call view here).
+        if join_window.get_in_call() {
+            return;
         }
+        let (endpoint, room, username) = (
+            endpoint.trim().to_string(),
+            room.trim().to_string(),
+            username.trim().to_string(),
+        );
+        join_window.set_in_call(true);
+        let window = join_window.as_weak();
+        let runtime = Arc::clone(&runtime);
+        let input_override = args.input_device.clone();
+        let output_override = args.output_device.clone();
+        runtime.spawn(async move {
+            // Persistent config: prefer CLI flags, fall back to saved
+            // preferences, then the host default devices.
+            let mut config = AppConfig::load();
+            let input_device = match input_override {
+                Some(id) => Some(id),
+                None => match config.input_device.clone() {
+                    Some(id) => Some(id),
+                    None => zancord_app::app::default_device(
+                        zancord_audio::devices::list_input_devices().unwrap_or_default(),
+                    ),
+                },
+            };
+            let output_device = match output_override {
+                Some(id) => Some(id),
+                None => match config.output_device.clone() {
+                    Some(id) => Some(id),
+                    None => zancord_app::app::default_device(
+                        zancord_audio::devices::list_output_devices().unwrap_or_default(),
+                    ),
+                },
+            };
+
+            // Remember the endpoint/room/username for the next launch.
+            config.last_endpoint = Some(endpoint.clone());
+            config.last_room = Some(room.clone());
+            config.username = Some(username.clone());
+            if let Err(err) = config.save() {
+                tracing::warn!(error = %err, "failed to save config");
+            }
+
+            if let Err(err) = zancord_app::app::App::run(
+                window.clone(),
+                endpoint,
+                room,
+                username,
+                input_device,
+                output_device,
+            )
+            .await
+            {
+                tracing::error!(error = %err, "app orchestrator exited with an error");
+                let _ = window.upgrade_in_event_loop(move |w| {
+                    w.set_in_call(false);
+                    w.set_join_error(format!("{err:#}").into());
+                });
+            }
+        });
     });
+
+    // CLI mode: skip the join screen and connect immediately (the callback
+    // flips the view and spawns the orchestrator).
+    if args.ws_url.is_some() {
+        window.invoke_join_clicked(
+            args.ws_url
+                .as_deref()
+                .unwrap_or_default()
+                .to_string()
+                .into(),
+            args.room.as_deref().unwrap_or_default().to_string().into(),
+            args.username
+                .as_deref()
+                .unwrap_or_default()
+                .to_string()
+                .into(),
+        );
+    }
 
     window.run()?;
     Ok(())
