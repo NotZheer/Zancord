@@ -49,6 +49,7 @@ pub struct App {
     mesh: Option<MeshManager>,
     mesh_events: Option<broadcast::Receiver<MeshEvent>>,
     audio_control: Option<mpsc::Sender<AudioControl>>,
+    screen_share: Option<crate::screen_share::ScreenShareSession>,
     local_state: MediaStatePayload,
     cmd_tx: mpsc::Sender<UiCommand>,
 }
@@ -123,6 +124,7 @@ impl App {
             mesh: Some(mesh),
             mesh_events: Some(mesh_events),
             audio_control: Some(control_tx),
+            screen_share: None,
             local_state: MediaStatePayload {
                 mic_enabled: true,
                 ..Default::default()
@@ -280,17 +282,42 @@ impl App {
                 });
             }
             UiCommand::ToggleScreenShare => {
-                self.local_state.screen_sharing = !self.local_state.screen_sharing;
-                mesh.set_screen_enabled(self.local_state.screen_sharing)
-                    .await?;
+                let on = !self.local_state.screen_sharing;
+                self.local_state.screen_sharing = on;
+                mesh.set_screen_enabled(on).await?;
                 let _ = self
                     .client
                     .send(SignalMessage::MediaState {
-                        peer_id: local_id,
+                        peer_id: local_id.clone(),
                         state: self.local_state,
                     })
                     .await;
-                let on = self.local_state.screen_sharing;
+                if on {
+                    match crate::screen_share::ScreenShareSession::start(mesh, self.window.clone()) {
+                        Ok(session) => self.screen_share = Some(session),
+                        Err(err) => {
+                            self.local_state.screen_sharing = false;
+                            mesh.set_screen_enabled(false).await?;
+                            let _ = self
+                                .client
+                                .send(SignalMessage::MediaState {
+                                    peer_id: local_id.clone(),
+                                    state: self.local_state,
+                                })
+                                .await;
+                            self.notify(format!("Screen share failed: {err}"), "error");
+                            let window = self.window.clone();
+                            let _ = window.upgrade_in_event_loop(|w| w.set_screen_sharing(false));
+                            return Ok(true);
+                        }
+                    }
+                } else if let Some(mut session) = self.screen_share.take() {
+                    session.stop();
+                    let window = self.window.clone();
+                    let _ = window.upgrade_in_event_loop(|w| {
+                        w.set_local_has_video(false);
+                    });
+                }
                 let window = self.window.clone();
                 let _ = window.upgrade_in_event_loop(move |w| w.set_screen_sharing(on));
                 self.notify(
@@ -513,6 +540,14 @@ impl App {
                         }
                     });
                 }
+                if let Some(rx) = mesh.take_incoming_video(&peer_id) {
+                    info!(peer = %peer_id, "claimed incoming video channel");
+                    crate::screen_share::spawn_remote_video_forwarder(
+                        rx,
+                        self.window.clone(),
+                        peer_id.clone(),
+                    );
+                }
                 let username = self
                     .usernames
                     .get(&peer_id)
@@ -547,6 +582,7 @@ impl App {
             MeshEvent::MediaState { peer_id, state } => {
                 info!(peer = %peer_id, mic = state.mic_enabled, screen = state.screen_sharing, "peer media state");
                 self.set_peer_tile_muted(&peer_id, !state.mic_enabled);
+                self.set_peer_tile_screen_share(&peer_id, state.screen_sharing);
             }
         }
     }
@@ -596,6 +632,23 @@ impl App {
                     if let Some(mut p) = peers.row_data(i) {
                         if p.id.as_str() == id {
                             p.is_muted = muted;
+                            peers.set_row_data(i, p);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn set_peer_tile_screen_share(&self, id: &str, sharing: bool) {
+        let window = self.window.clone();
+        let id = id.to_owned();
+        let _ = window.upgrade_in_event_loop(move |w| {
+            if let Some(peers) = w.get_peers().as_any().downcast_ref::<VecModel<PeerData>>() {
+                for i in 0..peers.row_count() {
+                    if let Some(mut p) = peers.row_data(i) {
+                        if p.id.as_str() == id {
+                            p.is_screen_share = sharing;
                             peers.set_row_data(i, p);
                         }
                     }

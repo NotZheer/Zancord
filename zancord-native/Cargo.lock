@@ -8245,9 +8245,11 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zancord-audio",
+ "zancord-capture",
  "zancord-protocol",
  "zancord-signaling-client",
  "zancord-transport",
+ "zancord-video",
 ]
 
 [[package]]
