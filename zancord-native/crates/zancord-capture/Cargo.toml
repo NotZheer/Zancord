@@ -12,6 +12,11 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+# Webcam capture (Phase 5.2): nokhwa drives the device on its own thread;
+# `input-native` selects AVFoundation/V4L2/MediaFoundation per platform and
+# `decoding` enables RGB24 conversion of the captured frames.
+nokhwa = { version = "0.10", features = ["input-native", "decoding", "output-threaded"] }
+
 # Platform-specific backends (added in Phase 3):
 # macOS:  screencapturekit, core-foundation, core-video, objc2
 # Linux:  ashpd, pipewire, spa

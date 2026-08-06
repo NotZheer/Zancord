@@ -50,6 +50,7 @@ pub struct App {
     mesh_events: Option<broadcast::Receiver<MeshEvent>>,
     audio_control: Option<mpsc::Sender<AudioControl>>,
     screen_share: Option<crate::screen_share::ScreenShareSession>,
+    camera_session: Option<crate::camera::CameraSession>,
     local_state: MediaStatePayload,
     cmd_tx: mpsc::Sender<UiCommand>,
 }
@@ -125,6 +126,7 @@ impl App {
             mesh_events: Some(mesh_events),
             audio_control: Some(control_tx),
             screen_share: None,
+            camera_session: None,
             local_state: MediaStatePayload {
                 mic_enabled: true,
                 ..Default::default()
@@ -286,22 +288,72 @@ impl App {
                 let _ = window.upgrade_in_event_loop(move |w| w.set_mic_enabled(on));
             }
             UiCommand::ToggleCamera => {
-                self.local_state.camera_enabled = !self.local_state.camera_enabled;
-                mesh.set_camera_enabled(self.local_state.camera_enabled)
-                    .await?;
+                let on = !self.local_state.camera_enabled;
+                self.local_state.camera_enabled = on;
+                mesh.set_camera_enabled(on).await?;
                 let _ = self
                     .client
                     .send(SignalMessage::MediaState {
-                        peer_id: local_id,
+                        peer_id: local_id.clone(),
                         state: self.local_state,
                     })
                     .await;
-                let on = self.local_state.camera_enabled;
+                if on {
+                    let camera_tx = mesh.camera_tx();
+                    let feedback_rx = mesh.feedback_rx();
+                    let window_clone = self.window.clone();
+                    // Opening the device (AVFoundation handshake) may block for
+                    // seconds — never run it on the async UI context.
+                    let start_res = tokio::task::spawn_blocking(move || {
+                        crate::camera::CameraSession::start_with_channels(
+                            camera_tx,
+                            feedback_rx,
+                            window_clone,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {e}")));
+                    match start_res {
+                        Ok(session) => self.camera_session = Some(session),
+                        Err(err) => {
+                            self.local_state.camera_enabled = false;
+                            mesh.set_camera_enabled(false).await?;
+                            let _ = self
+                                .client
+                                .send(SignalMessage::MediaState {
+                                    peer_id: local_id.clone(),
+                                    state: self.local_state,
+                                })
+                                .await;
+                            self.notify(format!("Camera failed: {err}"), "error");
+                            let window = self.window.clone();
+                            let _ = window.upgrade_in_event_loop(|w| {
+                                w.set_camera_enabled(false);
+                                w.set_local_has_video(false);
+                            });
+                            return Ok(true);
+                        }
+                    }
+                } else if let Some(mut session) = self.camera_session.take() {
+                    session.stop();
+                    let window = self.window.clone();
+                    let _ = window.upgrade_in_event_loop(|w| {
+                        w.set_local_has_video(false);
+                    });
+                }
                 let window = self.window.clone();
                 let _ = window.upgrade_in_event_loop(move |w| {
                     w.set_camera_enabled(on);
                     w.set_local_has_video(on);
                 });
+                self.notify(
+                    if on {
+                        "Camera started".into()
+                    } else {
+                        "Camera stopped".into()
+                    },
+                    "info",
+                );
             }
             UiCommand::ToggleScreenShare => {
                 let on = !self.local_state.screen_sharing;

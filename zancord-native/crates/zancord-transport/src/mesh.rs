@@ -329,6 +329,13 @@ impl MeshManager {
         let _ = self.event_tx.send(MeshEvent::PeerConnected {
             peer_id: peer.id.clone(),
         });
+        // Initial media state (server keeps it fresh and includes it in
+        // RoomState/PeerJoined) so tiles are correct from the first frame —
+        // live toggles arrive separately as MediaState signals.
+        let _ = self.event_tx.send(MeshEvent::MediaState {
+            peer_id: peer.id.clone(),
+            state: peer.media_state,
+        });
         info!(local = %self.local_id, peer = %peer.id, count = self.peers.len(), "peer connected");
 
         // The offerer (smaller id) initiates; the other side answers.

@@ -33,6 +33,12 @@ const KB: f32 = 0.114;
 /// Convert one BGRA (8bpc, non-premultiplied) pixel to YUV (BT.601 limited).
 #[inline]
 fn bgra_to_yuv(b: u8, g: u8, r: u8) -> (u8, u8, u8) {
+    rgb_to_yuv(r, g, b)
+}
+
+/// Convert one RGB888 pixel to YUV (BT.601 limited).
+#[inline]
+fn rgb_to_yuv(r: u8, g: u8, b: u8) -> (u8, u8, u8) {
     let (r, g, b) = (f32::from(r), f32::from(g), f32::from(b));
     let y = (16.0 + KR * r + KG * g + KB * b).round().clamp(16.0, 235.0);
     let u = (128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b)
@@ -94,6 +100,45 @@ pub fn bgra_to_i420(data: &[u8], width: u32, height: u32) -> Result<I420Frame, C
         for col in 0..w {
             let px = (row * w + col) * 4;
             let (py, pu, pv) = bgra_to_yuv(data[px], data[px + 1], data[px + 2]);
+            y[row * w + col] = py;
+            if row % 2 == 0 && col % 2 == 0 {
+                let uv_idx = (row / 2) * (w / 2) + col / 2;
+                u[uv_idx] = pu;
+                v[uv_idx] = pv;
+            }
+        }
+    }
+    Ok(I420Frame {
+        width,
+        height,
+        y,
+        u,
+        v,
+    })
+}
+
+/// Convert RGB24 (8bpc, R,G,B per pixel — what nokhwa's `RgbFormat` decoder
+/// produces) to planar I420.
+pub fn rgb_to_i420(data: &[u8], width: u32, height: u32) -> Result<I420Frame, ConversionError> {
+    check_dims(width, height)?;
+    let expected = (width * height * 3) as usize;
+    if data.len() != expected {
+        return Err(ConversionError::DimensionMismatch {
+            expected,
+            actual: data.len(),
+        });
+    }
+    let (y_size, uv_size) = yuv_sizes(width, height);
+    let mut y = vec![0u8; y_size];
+    let mut u = vec![0u8; uv_size];
+    let mut v = vec![0u8; uv_size];
+
+    let w = width as usize;
+    let h = height as usize;
+    for row in 0..h {
+        for col in 0..w {
+            let px = (row * w + col) * 3;
+            let (py, pu, pv) = rgb_to_yuv(data[px], data[px + 1], data[px + 2]);
             y[row * w + col] = py;
             if row % 2 == 0 && col % 2 == 0 {
                 let uv_idx = (row / 2) * (w / 2) + col / 2;
@@ -260,6 +305,50 @@ mod tests {
         assert!(white
             .chunks_exact(4)
             .all(|c| c[0] == 255 && c[1] == 255 && c[2] == 255));
+    }
+
+    #[test]
+    fn rgb_gray_to_i420_matches_bt601() {
+        // Gray (128): Y = 16 + 0.299*128 + 0.587*128 + 0.114*128 ≈ 144, U=V=128.
+        let mut px = vec![0u8; 2 * 2 * 3];
+        for chunk in px.chunks_exact_mut(3) {
+            chunk.copy_from_slice(&[128, 128, 128]);
+        }
+        let frame = rgb_to_i420(&px, 2, 2).unwrap();
+        assert!(frame.y.iter().all(|&p| p == 144));
+        assert!(frame.u.iter().all(|&p| p == 128));
+        assert!(frame.v.iter().all(|&p| p == 128));
+    }
+
+    #[test]
+    fn rgb_red_matches_bgra_red() {
+        // Same pixel expressed as RGB and as BGRA must land on the same YUV.
+        let mut rgb = vec![0u8; 2 * 2 * 3];
+        rgb[0] = 255; // R
+        let from_rgb = rgb_to_i420(&rgb, 2, 2).unwrap();
+
+        let mut bgra = vec![0u8; 2 * 2 * 4];
+        bgra[2] = 255; // R in BGRA order
+        let from_bgra = bgra_to_i420(&bgra, 2, 2).unwrap();
+
+        assert_eq!(from_rgb.y, from_bgra.y);
+        assert_eq!(from_rgb.u, from_bgra.u);
+        assert_eq!(from_rgb.v, from_bgra.v);
+    }
+
+    #[test]
+    fn rgb_black_and_white() {
+        let black = rgb_to_i420(&vec![0; 2 * 2 * 3], 2, 2).unwrap();
+        assert!(black.y.iter().all(|&p| p == 16)); // limited range black
+        let white = rgb_to_i420(&vec![255; 2 * 2 * 3], 2, 2).unwrap();
+        assert!(white.y.iter().all(|&p| p == 235)); // limited range white
+    }
+
+    #[test]
+    fn rgb_rejects_bad_dimensions_and_lengths() {
+        assert!(rgb_to_i420(&[], 0, 2).is_err());
+        assert!(rgb_to_i420(&[], 3, 3).is_err()); // odd dims
+        assert!(rgb_to_i420(&[0; 11], 2, 2).is_err()); // wrong length (12 expected)
     }
 
     #[test]

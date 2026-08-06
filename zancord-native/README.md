@@ -13,9 +13,9 @@ screen sharing — implemented in Rust with a Slint UI. Full-mesh P2P over Tails
 | 1C | Audio pipeline | ✅ |
 | 1D | WebRTC transport | ✅ |
 | 2 | Voice call end-to-end (CLI harness) | ✅ loopback-verified |
-| 3 | Capture + video | ⬜ |
-| 4 | Slint UI | ⬜ |
-| 5 | Full integration | ⬜ |
+| 3 | Capture + video | ✅ screen (SCK/PipeWire), camera (nokhwa), H.264/VP8 |
+| 4 | Slint UI | ✅ |
+| 5 | Full integration | 🟡 5.1 screen share E2E ✅; 5.2 camera E2E code-complete, awaiting on-device verification |
 | 6 | Polish & parity | ⬜ |
 
 ## Workspace

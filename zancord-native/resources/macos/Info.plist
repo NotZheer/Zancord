@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Zancord</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.zancord.app</string>
+    <key>CFBundleExecutable</key>
+    <string>zancord-app</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Zancord requires camera access for P2P video calls.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Zancord requires microphone access for P2P voice calls.</string>
+    <key>NSDesktopScreenRecordingUsageDescription</key>
+    <string>Zancord requires screen recording permission to share your screen.</string>
+</dict>
+</plist>

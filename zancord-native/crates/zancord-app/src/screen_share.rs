@@ -319,7 +319,10 @@ pub fn spawn_remote_video_forwarder(
                             if p.id.as_str() == pid {
                                 p.frame = img;
                                 p.has_video = true;
-                                p.is_screen_share = true;
+                                // `is_screen_share` is driven by MediaState
+                                // (initial + live) — camera and screen share
+                                // both land in this channel, so the badge must
+                                // not be inferred from video arriving.
                                 peers.set_row_data(i, p);
                                 break;
                             }
@@ -332,7 +335,7 @@ pub fn spawn_remote_video_forwarder(
 }
 
 /// Crops to even dimensions (required by the I420 converters).
-fn even_dims(width: u32, height: u32) -> (u32, u32) {
+pub(crate) fn even_dims(width: u32, height: u32) -> (u32, u32) {
     (width & !1, height & !1)
 }
 
@@ -350,7 +353,12 @@ fn bgra_to_rgba(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 }
 
 /// Pushes a local preview frame into the self-view tile.
-fn post_local_preview(window: &Weak<MainWindow>, rgba: Vec<u8>, width: u32, height: u32) {
+pub(crate) fn post_local_preview(
+    window: &Weak<MainWindow>,
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+) {
     // `Image` is not Send in Slint — build it on the UI thread.
     let window = window.clone();
     let _ = window.upgrade_in_event_loop(move |w| {

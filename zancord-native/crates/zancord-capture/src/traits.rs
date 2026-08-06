@@ -16,6 +16,8 @@ pub enum CaptureSourceType {
 pub enum PixelFormat {
     Bgra,
     Nv12,
+    /// RGB24 (R,G,B per pixel) — what the nokhwa camera backend produces.
+    Rgb,
 }
 
 #[derive(Debug, Clone)]
