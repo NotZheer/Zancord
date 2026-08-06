@@ -75,7 +75,10 @@ async fn handle_socket(mut socket: WebSocket, room_id: String, manager: Arc<Room
         tokio::select! {
             incoming = socket.recv() => {
                 match incoming {
-                    None | Some(Err(_)) => break,
+                    None | Some(Err(_)) => {
+                        debug!(target: "zancord_signaling_server", peer_id = %my_id, "socket recv ended");
+                        break;
+                    }
                     Some(Ok(Message::Text(text))) => {
                         if !handle_client_message(&mut socket, &manager, &room_id, &my_id, &mut limiter, &text).await {
                             // LeaveRoom: close the handshake cleanly so the peer
@@ -100,7 +103,10 @@ async fn handle_socket(mut socket: WebSocket, room_id: String, manager: Arc<Room
                     Err(RecvError::Lagged(_)) => {
                         debug!(target: "zancord_signaling_server", peer_id = %my_id, "broadcast lag: dropped events");
                     }
-                    Err(RecvError::Closed) => break,
+                    Err(RecvError::Closed) => {
+                        debug!(target: "zancord_signaling_server", peer_id = %my_id, "room channel closed");
+                        break;
+                    }
                 }
             }
         }

@@ -104,14 +104,20 @@ async fn main() -> anyhow::Result<()> {
 
     // The orchestrator runs on a tokio worker; UI mutations hop back to the
     // UI thread via `upgrade_in_event_loop`.
-    tokio::spawn(zancord_app::app::App::run(
-        weak,
-        ws_url,
-        room,
-        username,
-        input_device,
-        output_device,
-    ));
+    tokio::spawn(async move {
+        if let Err(err) = zancord_app::app::App::run(
+            weak,
+            ws_url,
+            room,
+            username,
+            input_device,
+            output_device,
+        )
+        .await
+        {
+            tracing::error!(error = %err, "app orchestrator exited with an error");
+        }
+    });
 
     window.run()?;
     Ok(())

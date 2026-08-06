@@ -133,14 +133,26 @@ impl App {
         };
 
         app.init_ui();
+        info!("ui initialized; wiring callbacks");
         app.wire_callbacks()?;
+        info!("callbacks wired");
         app.notify("Connected to room".into(), "success");
+        info!("entering event loop");
 
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
+                _ = heartbeat.tick() => {
+                    debug!(target: "zancord_app", "app heartbeat");
+                }
                 cmd = cmd_rx.recv() => {
-                    let Some(cmd) = cmd else { break };
+                    let Some(cmd) = cmd else {
+                        warn!("command channel closed; exiting");
+                        break;
+                    };
                     if !app.handle_command(cmd).await? {
+                        info!("command requested exit");
                         break;
                     }
                 }
@@ -150,6 +162,7 @@ impl App {
                         break;
                     };
                     if !app.handle_signal(msg).await? {
+                        info!("signal requested exit");
                         break; // room full / fatal
                     }
                 }
@@ -173,7 +186,7 @@ impl App {
             }
         }
         if let Some(tx) = app.audio_control.take() {
-            let _ = tx.blocking_send(AudioControl::Shutdown);
+            let _ = tx.try_send(AudioControl::Shutdown);
         }
         if audio_handle.join().is_err() {
             warn!("audio thread panicked");
@@ -204,42 +217,51 @@ impl App {
     }
 
     fn wire_callbacks(&self) -> anyhow::Result<()> {
-        let window = self
-            .window
-            .upgrade()
-            .context("window dropped before callbacks wired")?;
+        // Slint's `Weak::upgrade()` only succeeds on the UI thread — component
+        // mutation (including callback registration) must happen there, so do
+        // it inside `upgrade_in_event_loop`.
+        let window = self.window.clone();
         let cmd = self.cmd_tx.clone();
-        window.on_toggle_mic(move || {
-            let _ = cmd.blocking_send(UiCommand::ToggleMic);
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_toggle_camera(move || {
-            let _ = cmd.blocking_send(UiCommand::ToggleCamera);
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_toggle_screen_share(move || {
-            let _ = cmd.blocking_send(UiCommand::ToggleScreenShare);
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_toggle_deafen(move || {
-            let _ = cmd.blocking_send(UiCommand::ToggleDeafen);
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_leave_room(move || {
-            let _ = cmd.blocking_send(UiCommand::Leave);
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_send_chat(move |content| {
-            let _ = cmd.blocking_send(UiCommand::SendChat(content.to_string()));
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_copy_invite_link(move || {
-            let _ = cmd.blocking_send(UiCommand::CopyLink);
-        });
-        let cmd = self.cmd_tx.clone();
-        window.on_toggle_chat(move || {
-            let _ = cmd.blocking_send(UiCommand::ToggleChat);
-        });
+        window
+            .upgrade_in_event_loop(move |w| {
+                let base = cmd;
+                // UI callbacks run on the UI thread, which sits inside tokio's
+                // block_on context — `blocking_send` would panic there, so use
+                // `try_send` (channel capacity 64; a dropped click is fine).
+                let c = base.clone();
+                w.on_toggle_mic(move || {
+                    let _ = c.try_send(UiCommand::ToggleMic);
+                });
+                let c = base.clone();
+                w.on_toggle_camera(move || {
+                    let _ = c.try_send(UiCommand::ToggleCamera);
+                });
+                let c = base.clone();
+                w.on_toggle_screen_share(move || {
+                    let _ = c.try_send(UiCommand::ToggleScreenShare);
+                });
+                let c = base.clone();
+                w.on_toggle_deafen(move || {
+                    let _ = c.try_send(UiCommand::ToggleDeafen);
+                });
+                let c = base.clone();
+                w.on_leave_room(move || {
+                    let _ = c.try_send(UiCommand::Leave);
+                });
+                let c = base.clone();
+                w.on_send_chat(move |content| {
+                    let _ = c.try_send(UiCommand::SendChat(content.to_string()));
+                });
+                let c = base.clone();
+                w.on_copy_invite_link(move || {
+                    let _ = c.try_send(UiCommand::CopyLink);
+                });
+                let c = base.clone();
+                w.on_toggle_chat(move || {
+                    let _ = c.try_send(UiCommand::ToggleChat);
+                });
+            })
+            .map_err(|_| anyhow::anyhow!("window dropped before callbacks wired"))?;
         Ok(())
     }
 

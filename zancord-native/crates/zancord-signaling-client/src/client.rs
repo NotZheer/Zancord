@@ -199,9 +199,17 @@ async fn session(
     }
     info!(target: "zancord_signaling_client", room_id = %room_id, "joined room, waiting for RoomState");
 
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
-            _ = shutdown.changed() => return false,
+            _ = heartbeat.tick() => {
+                debug!(target: "zancord_signaling_client", "session heartbeat");
+            }
+            _ = shutdown.changed() => {
+                debug!(target: "zancord_signaling_client", "session: shutdown requested");
+                return false;
+            }
             outbound = outgoing.recv() => {
                 match outbound {
                     Some(msg) => {
@@ -211,7 +219,10 @@ async fn session(
                             return true;
                         }
                     }
-                    None => return false, // client dropped; stop the task
+                    None => {
+                        debug!(target: "zancord_signaling_client", "session: outgoing channel closed");
+                        return false; // client dropped; stop the task
+                    }
                 }
             }
             inbound = stream.next() => {
@@ -221,6 +232,7 @@ async fn session(
                             Ok(msg) => {
                                 debug!(target: "zancord_signaling_client", ?msg, "received");
                                 if events.send(msg).await.is_err() {
+                                    debug!(target: "zancord_signaling_client", "session: events channel closed");
                                     return false; // consumer gone
                                 }
                             }
@@ -237,7 +249,10 @@ async fn session(
                         debug!(target: "zancord_signaling_client", error = %e, "connection error");
                         return true;
                     }
-                    None => return true, // server closed the connection
+                    None => {
+                        debug!(target: "zancord_signaling_client", "session: socket closed by server");
+                        return true; // server closed the connection
+                    }
                 }
             }
         }
