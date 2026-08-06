@@ -7,7 +7,7 @@
     <key>CFBundleIdentifier</key>
     <string>dev.zancord.app</string>
     <key>CFBundleExecutable</key>
-    <string>zancord-app</string>
+    <string>zancord-ui</string>
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
     <key>CFBundleShortVersionString</key>
