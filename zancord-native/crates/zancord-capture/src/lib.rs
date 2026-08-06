@@ -48,3 +48,10 @@ pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
 pub fn create_camera(config: &CameraConfig) -> anyhow::Result<Box<dyn CameraCapturer>> {
     Ok(Box::new(NokhwaCameraCapturer::open(config)?))
 }
+
+/// Enumerates capture sources (displays + windows) for the UI picker. On
+/// Linux the portal owns selection, so the list is a single synthetic entry.
+pub fn list_capture_sources() -> anyhow::Result<Vec<CaptureSource>> {
+    let capturer = create_capturer()?;
+    capturer.available_sources()
+}

@@ -26,6 +26,7 @@ use pw::spa::pod::{serialize::PodSerializer, Object, Pod, Property, Value};
 use pw::spa::utils::SpaTypes;
 use tracing::{debug, info, warn};
 
+use crate::linux_audio::LinuxSystemAudioCapturer;
 use crate::traits::{
     CaptureConfig, CaptureSource, CaptureSourceType, CapturedVideoFrame, PixelFormat,
     ScreenCapturer,
@@ -60,6 +61,8 @@ pub struct LinuxScreenCapturer {
     config: CaptureConfig,
     /// Runtime for the ashpd (zbus) async portal calls.
     runtime: tokio::runtime::Runtime,
+    /// System audio (default sink monitor), started alongside the video.
+    audio: Option<LinuxSystemAudioCapturer>,
 }
 
 // Safety: the PipeWire wrappers own raw C pointers whose targets are
@@ -86,6 +89,7 @@ impl LinuxScreenCapturer {
                 .enable_all()
                 .build()
                 .expect("tokio runtime for portal calls"),
+            audio: None,
         }
     }
 }
@@ -276,10 +280,26 @@ impl ScreenCapturer for LinuxScreenCapturer {
             height = config.height,
             "screen capture started"
         );
+
+        // System audio: PipeWire monitor of the default sink. A failure here
+        // degrades to video-only (the share itself still works).
+        if config.capture_audio {
+            let mut audio = LinuxSystemAudioCapturer::new();
+            match audio.start() {
+                Ok(()) => self.audio = Some(audio),
+                Err(err) => warn!(error = %err, "system audio unavailable; sharing video only"),
+            }
+        }
         Ok(())
     }
 
     fn stop_capture(&mut self) -> Result<()> {
+        // System audio first (own thread loop; independent of the video loop).
+        if let Some(mut audio) = self.audio.take() {
+            if let Err(err) = audio.stop() {
+                warn!(error = %err, "system audio stop failed");
+            }
+        }
         if let Some(thread_loop) = self.thread_loop.take() {
             thread_loop.stop();
         }
@@ -300,8 +320,11 @@ impl ScreenCapturer for LinuxScreenCapturer {
     }
 
     fn audio_sample_rx(&self) -> Option<&Receiver<crate::traits::CapturedAudioFrame>> {
-        // System audio capture lands in Phase 3B (PipeWire monitor stream).
-        None
+        // The PipeWire sink monitor captures ALL system output — including our
+        // own voice if the speakers are used (true echo exclusion would need a
+        // reference-signal model; `exclude_self_audio` is honored on macOS SCK
+        // where the OS provides it).
+        self.audio.as_ref().map(|audio| audio.audio_sample_rx())
     }
 }
 

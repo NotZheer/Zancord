@@ -49,6 +49,7 @@ impl ScreenShareSession {
             mesh.screen_audio_tx(),
             mesh.feedback_rx(),
             window,
+            None,
         )
     }
 
@@ -57,13 +58,24 @@ impl ScreenShareSession {
         screen_audio_tx: tokio::sync::mpsc::Sender<zancord_protocol::EncodedAudioFrame>,
         mut feedback_rx: tokio::sync::broadcast::Receiver<RtcpFeedback>,
         window: Weak<MainWindow>,
+        chosen_source_id: Option<String>,
     ) -> Result<Self> {
         let mut capturer = create_capturer()?;
         let sources = capturer.available_sources()?;
-        let source = sources
-            .first()
-            .cloned()
-            .context("no capture sources available")?;
+        // The picker's saved choice wins; fall back to the first source (the
+        // only one on Linux, where the portal presents the real list).
+        let source = match &chosen_source_id {
+            Some(id) => sources
+                .iter()
+                .find(|s| s.id == *id)
+                .cloned()
+                .or_else(|| sources.first().cloned())
+                .context("no capture sources available")?,
+            None => sources
+                .first()
+                .cloned()
+                .context("no capture sources available")?,
+        };
         let config = CaptureConfig {
             width: SHARE_WIDTH,
             height: SHARE_HEIGHT,

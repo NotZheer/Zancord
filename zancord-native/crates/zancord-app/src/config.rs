@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub input_device: Option<String>,
     pub output_device: Option<String>,
     pub camera_index: Option<u32>,
+    /// Last capture source id chosen in the screen picker (display:N / window:N).
+    pub screen_source_id: Option<String>,
     pub noise_gate_enabled: bool,
     pub noise_gate_threshold_db: f32,
     pub hpf_enabled: bool,
@@ -32,6 +34,7 @@ impl Default for AppConfig {
             input_device: None,
             output_device: None,
             camera_index: None,
+            screen_source_id: None,
             noise_gate_enabled: true,
             noise_gate_threshold_db: -40.0,
             hpf_enabled: true,
@@ -102,6 +105,7 @@ mod tests {
             input_device: Some("hw:0".into()),
             output_device: Some("pulse".into()),
             camera_index: Some(2),
+            screen_source_id: Some("display:1".into()),
             ..Default::default()
         };
         config.save_to(&path).expect("saves");
@@ -111,6 +115,7 @@ mod tests {
         assert_eq!(loaded.input_device.as_deref(), Some("hw:0"));
         assert_eq!(loaded.output_device.as_deref(), Some("pulse"));
         assert_eq!(loaded.camera_index, Some(2));
+        assert_eq!(loaded.screen_source_id.as_deref(), Some("display:1"));
         assert!(
             loaded.noise_gate_enabled,
             "defaults apply for missing fields"

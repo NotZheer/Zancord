@@ -37,6 +37,7 @@ enum UiCommand {
     CopyLink,
     ToggleChat,
     SelectCamera(u32),
+    SelectScreenSource(usize),
 }
 
 pub struct App {
@@ -62,6 +63,9 @@ pub struct App {
     /// Enumerated cameras (UI picker) + the current selection.
     cameras: Vec<zancord_capture::CameraSource>,
     camera_index: u32,
+    /// Enumerated capture sources (UI picker) + the saved choice (source id).
+    screen_sources: Vec<zancord_capture::CaptureSource>,
+    screen_source_id: Option<String>,
     cmd_tx: mpsc::Sender<UiCommand>,
 }
 
@@ -134,6 +138,13 @@ impl App {
             .camera_index
             .filter(|i| cameras.iter().any(|c| c.index == *i))
             .unwrap_or(0);
+        // Screen-source picker state (may be empty until screen-recording
+        // permission is granted — refreshed after the first share).
+        let screen_sources = zancord_capture::list_capture_sources().unwrap_or_default();
+        let screen_source_id = config
+            .screen_source_id
+            .clone()
+            .filter(|id| screen_sources.iter().any(|s| s.id == *id));
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel(64);
         let mut app = Self {
@@ -156,6 +167,8 @@ impl App {
             },
             cameras,
             camera_index,
+            screen_sources,
+            screen_source_id,
             cmd_tx,
         };
 
@@ -241,6 +254,17 @@ impl App {
             .find(|c| c.index == self.camera_index)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("Camera {}", self.camera_index));
+        let screen_names: Vec<slint::SharedString> = self
+            .screen_sources
+            .iter()
+            .map(|s| s.name.as_str().into())
+            .collect();
+        let current_screen = self
+            .screen_sources
+            .iter()
+            .find(|s| Some(&s.id) == self.screen_source_id.as_ref())
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "Screen".into());
         let _ = window.upgrade_in_event_loop(move |w| {
             w.set_room_name(room.into());
             // Seed the models with empty VecModels so later mutations can
@@ -250,6 +274,8 @@ impl App {
             w.set_toasts(ModelRc::new(VecModel::default()));
             w.set_cameras(ModelRc::new(VecModel::from(camera_names)));
             w.set_current_camera_name(current_camera.into());
+            w.set_screen_sources(ModelRc::new(VecModel::from(screen_names)));
+            w.set_current_screen_source_name(current_screen.into());
 
             w.set_peer_count(0);
             w.set_mic_enabled(true);
@@ -307,6 +333,12 @@ impl App {
                 let c = base.clone();
                 w.on_camera_selected(move |index| {
                     let _ = c.try_send(UiCommand::SelectCamera(index as u32));
+                });
+                let c = base.clone();
+                w.on_screen_source_selected(move |index| {
+                    // Resolved against the live source list in the handler
+                    // (the list can change after screen-recording permission).
+                    let _ = c.try_send(UiCommand::SelectScreenSource(index as usize));
                 });
             })
             .map_err(|_| anyhow::anyhow!("window dropped before callbacks wired"))?;
@@ -493,6 +525,36 @@ impl App {
                     if copied { "success" } else { "info" },
                 );
             }
+            UiCommand::SelectScreenSource(index) => {
+                let Some(source) = self.screen_sources.get(index).cloned() else {
+                    return Ok(true);
+                };
+                let id = source.id;
+                self.screen_source_id = Some(id.clone());
+                let mut config = crate::config::AppConfig::load();
+                config.screen_source_id = Some(id);
+                if let Err(err) = config.save() {
+                    warn!(error = %err, "failed to save screen source preference");
+                }
+                if self.local_state.screen_sharing {
+                    // Hot-swap the source: drop the session + track, re-add,
+                    // restart (the sharing flag itself is unchanged).
+                    if let Some(mut session) = self.screen_share.take() {
+                        session.stop();
+                    }
+                    if let Some(mesh) = self.mesh.as_mut() {
+                        mesh.set_screen_enabled(false).await?;
+                        mesh.set_screen_enabled(true).await?;
+                    }
+                    if !self.start_screen_session().await? {
+                        return Ok(true);
+                    }
+                }
+                let window = self.window.clone();
+                let _ = window.upgrade_in_event_loop(move |w| {
+                    w.set_current_screen_source_name(source.name.into());
+                });
+            }
             UiCommand::ToggleChat => {
                 let window = self.window.clone();
                 let _ = window.upgrade_in_event_loop(|w| {
@@ -564,6 +626,7 @@ impl App {
         let screen_audio_tx = mesh.screen_audio_tx();
         let feedback_rx = mesh.feedback_rx();
         let window_clone = self.window.clone();
+        let chosen_source_id = self.screen_source_id.clone();
         // Platform capture (portal picker / SCK) may block for seconds — never
         // run it on the async UI context.
         let start_res = tokio::task::spawn_blocking(move || {
@@ -572,6 +635,7 @@ impl App {
                 screen_audio_tx,
                 feedback_rx,
                 window_clone,
+                chosen_source_id,
             )
         })
         .await
@@ -579,6 +643,9 @@ impl App {
         match start_res {
             Ok(session) => {
                 self.screen_share = Some(session);
+                // Screen-recording permission may have been granted since
+                // launch — refresh the picker list and label.
+                self.refresh_screen_sources();
                 Ok(true)
             }
             Err(err) => {
@@ -941,6 +1008,31 @@ impl App {
                 }
                 w.set_peer_count(0);
             }
+        });
+    }
+
+    /// Re-enumerates capture sources and syncs the picker model/label. The
+    /// list can be empty at launch until screen-recording permission exists,
+    /// so it is refreshed after the first successful share.
+    fn refresh_screen_sources(&mut self) {
+        let Ok(sources) = zancord_capture::list_capture_sources() else {
+            return;
+        };
+        if sources.is_empty() {
+            return;
+        }
+        let names: Vec<slint::SharedString> =
+            sources.iter().map(|s| s.name.as_str().into()).collect();
+        let current = sources
+            .iter()
+            .find(|s| Some(&s.id) == self.screen_source_id.as_ref())
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| sources[0].name.clone());
+        self.screen_sources = sources;
+        let window = self.window.clone();
+        let _ = window.upgrade_in_event_loop(move |w| {
+            w.set_screen_sources(ModelRc::new(VecModel::from(names)));
+            w.set_current_screen_source_name(current.into());
         });
     }
 

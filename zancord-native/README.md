@@ -49,7 +49,7 @@ macOS screen capture requires signing: `codesign --force --sign - target/release
 | Stream | Profile | Encoder target | Notes |
 |--------|---------|----------------|-------|
 | Camera | 720p30 | 2 Mbps | Software H.264 (openh264) — the encode budget for smooth 30 fps |
-| Screen | 720p15 | 1.2 Mbps | Plus Opus screen-audio (macOS SCK / Linux monitor) |
+| Screen | 720p15 | 1.2 Mbps | Plus Opus screen-audio (macOS SCK / Linux PipeWire sink monitor) |
 
 - **Why not 1080p by default?** The 1080p branding describes the architecture's
   ceiling, not the default profile: full-mesh software encoding at 1080p would
@@ -63,5 +63,10 @@ macOS screen capture requires signing: `codesign --force --sign - target/release
 - **Camera picker:** the top-bar dropdown enumerates webcams (nokhwa `query`),
   persists the choice in `config.json` (`camera_index`), and hot-swaps the
   device mid-call (restarts capture + renegotiates the camera track).
+- **Screen-source picker:** the top-bar dropdown lists displays + windows
+  (macOS `SCShareableContent`); the choice persists (`screen_source_id`) and
+  hot-swaps mid-share. On Linux the XDG portal remains the picker (the entry
+  is the system picker itself), and system audio comes from a PipeWire
+  default-sink monitor — video-only if the monitor fails.
 
 See [AGENT.md](AGENT.md) for architecture, constraints, and conventions.

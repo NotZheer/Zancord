@@ -36,6 +36,10 @@ export component MainWindow inherits Window {
     in property <[string]> cameras;
     in property <string> current_camera_name;
     property <bool> camera_picker_visible: false;
+    // Screen-source picker (top bar).
+    in property <[string]> screen_sources;
+    in property <string> current_screen_source_name;
+    property <bool> screen_picker_visible: false;
     in-out property <bool> chat_visible: true;
 
     // Chat + toasts.
@@ -52,6 +56,7 @@ export component MainWindow inherits Window {
     callback copy_invite_link();
     callback toggle_chat();
     callback camera_selected(int);
+    callback screen_source_selected(int);
 
     background: Theme.bg-primary;
 
@@ -152,6 +157,61 @@ export component MainWindow inherits Window {
                                     }
                                     states [
                                         hover when pick.has-hover: { background: Theme.bg-secondary; }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                    // Screen-source picker: displays + windows on macOS; on
+                    // Linux the portal owns selection, so the entry is the
+                    // system picker itself.
+                    Rectangle {
+                        width: 170px;
+                        Text {
+                            text: "🖥️ " + root.current_screen_source_name;
+                            color: Theme.text-secondary;
+                            font-size: Theme.font-size-sm;
+                            overflow: elide;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        scr_touch := TouchArea {
+                            clicked => { root.screen_picker_visible = !root.screen_picker_visible; }
+                            mouse-cursor: pointer;
+                        }
+                        states [
+                            hover when scr_touch.has-hover: { background: Theme.bg-secondary; }
+                        ]
+                        if root.screen_picker_visible: Rectangle {
+                            y: 44px;
+                            width: 240px;
+                            border-radius: Theme.radius-md;
+                            background: Theme.bg-surface;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            VerticalLayout {
+                                padding: Theme.spacing-xs;
+                                spacing: Theme.spacing-xs;
+                                for s[idx] in root.screen_sources: Rectangle {
+                                    width: 100%;
+                                    border-radius: Theme.radius-sm;
+                                    Text {
+                                        text: s;
+                                        color: Theme.text-primary;
+                                        font-size: Theme.font-size-sm;
+                                        overflow: elide;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    scr_pick := TouchArea {
+                                        clicked => {
+                                            root.screen_source_selected(idx);
+                                            root.screen_picker_visible = false;
+                                        }
+                                        mouse-cursor: pointer;
+                                    }
+                                    states [
+                                        hover when scr_pick.has-hover: { background: Theme.bg-secondary; }
                                     ]
                                 }
                             }
