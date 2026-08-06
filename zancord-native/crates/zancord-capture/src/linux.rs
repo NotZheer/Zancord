@@ -9,21 +9,22 @@
 //! dialog. Requires a running portal (xdg-desktop-portal + compositor
 //! backend) and PipeWire (libpipewire-0.3 at runtime).
 
+use std::os::fd::IntoRawFd;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use enumflags2::BitFlags;
 use pipewire as pw;
 use pipewire::properties::properties;
-use pw::spa::param::video::{VideoFormat, VideoInfoRaw};
+use pw::spa::param::video::VideoFormat;
 use pw::spa::param::ParamType;
-use pw::spa::pod::{serialize::PodSerializer, Object, Pod, Value};
+use pw::spa::pod::{serialize::PodSerializer, Object, Pod, Property, Value};
 use pw::spa::utils::SpaTypes;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::traits::{
     CaptureConfig, CaptureSource, CaptureSourceType, CapturedVideoFrame, PixelFormat,
@@ -35,7 +36,7 @@ const PICKER_SOURCE_ID: &str = "portal-picker";
 
 /// Per-stream state shared with the PipeWire process callback.
 struct StreamUserData {
-    format: VideoInfoRaw,
+    format: pw::spa::param::video::VideoInfoRaw,
     video_tx: Sender<CapturedVideoFrame>,
     stream_error: Arc<Mutex<Option<String>>>,
     started: Instant,
@@ -50,7 +51,7 @@ pub struct LinuxScreenCapturer {
     stream_error: Arc<Mutex<Option<String>>>,
     /// Leaked once per start (opaque ZST — no memory cost) to give the
     /// owning `Box` wrappers a `'static` loop reference.
-    thread_loop: Option<&'static pw::thread_loop::ThreadLoop>,
+    thread_loop: Option<&'static pw::thread_loop::ThreadLoopBox>,
     /// Drop order matters: listener → stream → core → context → loop.
     _listener: Option<pw::stream::StreamListener<StreamUserData>>,
     stream: Option<pw::stream::StreamBox<'static>>,
@@ -60,6 +61,12 @@ pub struct LinuxScreenCapturer {
     /// Runtime for the ashpd (zbus) async portal calls.
     runtime: tokio::runtime::Runtime,
 }
+
+// Safety: the PipeWire wrappers own raw C pointers whose targets are
+// refcounted and synchronized by the thread loop internally; transferring the
+// capturer between threads is safe because the process callback always runs on
+// the loop's own thread.
+unsafe impl Send for LinuxScreenCapturer {}
 
 impl LinuxScreenCapturer {
     pub fn new() -> Self {
@@ -108,8 +115,7 @@ impl ScreenCapturer for LinuxScreenCapturer {
 
         let types = match source.source_type {
             CaptureSourceType::Display => SourceType::Monitor | SourceType::Window,
-            CaptureSourceType::Window => SourceType::Monitor | SourceType::Window,
-            CaptureSourceType::Application => bail!("application capture is not supported"),
+            CaptureSourceType::Window => SourceType::Window | SourceType::Monitor,
         };
 
         // --- XDG Desktop Portal: session → picker → node id + fd ------------
@@ -157,25 +163,51 @@ impl ScreenCapturer for LinuxScreenCapturer {
         info!(node_id, "portal granted a capture stream");
 
         // --- PipeWire: connect to the portal node ----------------------------
-        let thread_loop: &'static pw::thread_loop::ThreadLoop =
-            Box::leak(Box::new(pw::thread_loop::ThreadLoop::new(None)?));
+        // The safe builders (`ContextBox::new` / `connect_fd` / `StreamBox::new`)
+        // tie object lifetimes to the loop borrow; the objects must outlive
+        // `start_capture`, so construct them from raw pointers instead.
+        let thread_loop: &'static pw::thread_loop::ThreadLoopBox = Box::leak(Box::new(unsafe {
+            pw::thread_loop::ThreadLoopBox::new(Some("zancord-loop"), None)?
+        }));
         thread_loop.start();
 
-        let context = pw::context::ContextBox::new(thread_loop.loop_(), None)
-            .context("pw_context_new failed")?;
-        let core = context
-            .connect_fd(fd, None)
-            .context("pw_context_connect_fd failed")?;
+        let context = unsafe {
+            let raw = pw::sys::pw_context_new(
+                (*thread_loop.loop_()).as_raw_ptr(),
+                std::ptr::null_mut(),
+                0,
+            );
+            pw::context::ContextBox::from_raw(
+                std::ptr::NonNull::new(raw).context("pw_context_new failed")?,
+            )
+        };
+        let core = unsafe {
+            let raw_fd = fd.into_raw_fd();
+            let raw = pw::sys::pw_context_connect_fd(
+                context.as_raw_ptr(),
+                raw_fd,
+                std::ptr::null_mut(),
+                0,
+            );
+            pw::core::CoreBox::from_raw(
+                std::ptr::NonNull::new(raw).context("pw_context_connect_fd failed")?,
+            )
+        };
         let props = properties! {
             *pw::keys::MEDIA_TYPE => "Video",
             *pw::keys::MEDIA_CATEGORY => "Capture",
             *pw::keys::MEDIA_ROLE => "Screen",
         };
-        let stream = pw::stream::StreamBox::new(&core, "zancord-screen", props)
-            .context("pw_stream_new failed")?;
+        let stream = unsafe {
+            let c_name = std::ffi::CString::new("zancord-screen").unwrap();
+            let raw = pw::sys::pw_stream_new(core.as_raw_ptr(), c_name.as_ptr(), props.into_raw());
+            pw::stream::StreamBox::from_raw(
+                std::ptr::NonNull::new(raw).context("pw_stream_new failed")?,
+            )
+        };
 
         let user_data = StreamUserData {
-            format: VideoInfoRaw::new(),
+            format: pw::spa::param::video::VideoInfoRaw::new(),
             video_tx: self.video_tx.clone(),
             stream_error: Arc::clone(&self.stream_error),
             started: Instant::now(),
@@ -207,7 +239,9 @@ impl ScreenCapturer for LinuxScreenCapturer {
             .register()
             .context("failed to register stream listener")?;
 
-        let mut params = [format_pod(config)?];
+        let pod_bytes = format_pod(config)?;
+        let pod = Pod::from_bytes(&pod_bytes).context("failed to parse format pod")?;
+        let mut params = [pod];
         stream
             .connect(
                 pw::spa::utils::Direction::Input,
@@ -260,27 +294,39 @@ impl ScreenCapturer for LinuxScreenCapturer {
 }
 
 /// Builds the SPA EnumFormat pod requesting BGRx at the configured size/fps.
-fn format_pod(config: &CaptureConfig) -> Result<Pod> {
-    let mut video_info = VideoInfoRaw::new();
-    video_info.set_format(VideoFormat::BGRx);
-    video_info.set_size(pw::spa::utils::Rectangle {
-        width: config.width.max(1),
-        height: config.height.max(1),
-    });
-    video_info.set_framerate(pw::spa::utils::Fraction {
-        num: config.fps.clamp(1, 60),
-        denom: 1,
-    });
+fn format_pod(config: &CaptureConfig) -> Result<Vec<u8>> {
     let obj = Object {
         type_: SpaTypes::ObjectParamFormat.as_raw(),
         id: ParamType::EnumFormat.as_raw(),
-        properties: video_info.into(),
+        properties: vec![
+            Property {
+                key: pw::spa::sys::SPA_FORMAT_VIDEO_format,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: Value::Id(pw::spa::utils::Id(VideoFormat::BGRx.as_raw())),
+            },
+            Property {
+                key: pw::spa::sys::SPA_FORMAT_VIDEO_size,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: Value::Rectangle(pw::spa::utils::Rectangle {
+                    width: config.width.max(1),
+                    height: config.height.max(1),
+                }),
+            },
+            Property {
+                key: pw::spa::sys::SPA_FORMAT_VIDEO_framerate,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: Value::Fraction(pw::spa::utils::Fraction {
+                    num: config.fps.clamp(1, 60),
+                    denom: 1,
+                }),
+            },
+        ],
     };
     let values = PodSerializer::serialize(std::io::Cursor::new(Vec::new()), &Value::Object(obj))
         .context("failed to serialize format pod")?
         .0
         .into_inner();
-    Pod::from_bytes(&values).context("failed to parse format pod")
+    Ok(values)
 }
 
 /// Copies one captured buffer out as a packed `CapturedVideoFrame`, stripping
@@ -289,21 +335,24 @@ fn buffer_to_frame(
     buffer: &mut pw::buffer::Buffer<'_>,
     user_data: &mut StreamUserData,
 ) -> Option<CapturedVideoFrame> {
-    let datas = buffer.datas_mut();
-    let data = datas.first_mut()?;
-    let slice = data.data()?;
-    let size = data.chunk().size() as usize;
-    if size == 0 {
-        return None;
-    }
-    let bytes = &slice[..size.min(slice.len())];
     let width = user_data.format.size().width;
     let height = user_data.format.size().height;
-    let stride = data.chunk().stride().max(0) as usize;
-    let row_bytes = width as usize * 4;
     if width == 0 || height == 0 {
         return None;
     }
+
+    let datas = buffer.datas_mut();
+    let data = datas.first_mut()?;
+    // Read chunk metadata before borrowing the data slice mutably.
+    let chunk = data.chunk();
+    let size = chunk.size() as usize;
+    let stride = chunk.stride().max(0) as usize;
+    if size == 0 {
+        return None;
+    }
+    let slice = data.data()?;
+    let bytes = &slice[..size.min(slice.len())];
+    let row_bytes = width as usize * 4;
 
     let (data, pixel_format) = match user_data.format.format() {
         VideoFormat::BGRx => {
@@ -390,8 +439,7 @@ mod tests {
             capture_audio: false,
             exclude_self_audio: true,
         };
-        let pod = format_pod(&config).expect("pod builds");
-        let bytes = pod.as_bytes();
+        let bytes = format_pod(&config).expect("pod builds");
         // SPA pod object header + media type video (1) / subtype raw (1) +
         // format BGRx property — spot-check that the object is non-trivial.
         assert!(bytes.len() > 32, "format pod has substance");

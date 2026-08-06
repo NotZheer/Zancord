@@ -13,9 +13,9 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use pipewire as pw;
 use pipewire::properties::properties;
-use pw::spa::param::audio::{AudioFormat, AudioInfoRaw};
+use pw::spa::param::audio::AudioFormat;
 use pw::spa::param::ParamType;
-use pw::spa::pod::{serialize::PodSerializer, Object, Pod, Value};
+use pw::spa::pod::{serialize::PodSerializer, Object, Pod, Property, Value};
 use pw::spa::utils::SpaTypes;
 use tracing::{debug, info, warn};
 
@@ -23,8 +23,9 @@ use crate::traits::CapturedAudioFrame;
 
 /// Per-stream state shared with the PipeWire process callback.
 struct AudioUserData {
-    format: AudioInfoRaw,
+    format: pw::spa::param::audio::AudioInfoRaw,
     audio_tx: Sender<CapturedAudioFrame>,
+    stream_error: Arc<Mutex<Option<String>>>,
     started: Instant,
 }
 
@@ -35,13 +36,18 @@ pub struct LinuxSystemAudioCapturer {
     audio_rx: Receiver<CapturedAudioFrame>,
     stream_error: Arc<Mutex<Option<String>>>,
     /// Leaked once per start (opaque ZST — no memory cost).
-    thread_loop: Option<&'static pw::thread_loop::ThreadLoop>,
+    thread_loop: Option<&'static pw::thread_loop::ThreadLoopBox>,
     /// Drop order matters: listener → stream → core → context → loop.
     _listener: Option<pw::stream::StreamListener<AudioUserData>>,
     stream: Option<pw::stream::StreamBox<'static>>,
     core: Option<pw::core::CoreBox<'static>>,
     context: Option<pw::context::ContextBox<'static>>,
 }
+
+// Safety: see `LinuxScreenCapturer` in `linux.rs` — PipeWire objects are
+// refcounted and synchronized by the thread loop; the capturer is only ever
+// transferred between threads, never used concurrently.
+unsafe impl Send for LinuxSystemAudioCapturer {}
 
 impl LinuxSystemAudioCapturer {
     pub fn new() -> Self {
@@ -65,25 +71,47 @@ impl LinuxSystemAudioCapturer {
             self.stop()?;
         }
 
-        let thread_loop: &'static pw::thread_loop::ThreadLoop =
-            Box::leak(Box::new(pw::thread_loop::ThreadLoop::new(None)?));
+        // The safe builders tie object lifetimes to the loop borrow; the
+        // objects must outlive `start`, so construct from raw pointers.
+        let thread_loop: &'static pw::thread_loop::ThreadLoopBox = Box::leak(Box::new(unsafe {
+            pw::thread_loop::ThreadLoopBox::new(Some("zancord-audio-loop"), None)?
+        }));
         thread_loop.start();
 
-        let context = pw::context::ContextBox::new(thread_loop.loop_(), None)
-            .context("pw_context_new failed")?;
-        let core = context.connect(None).context("pw_context_connect failed")?;
+        let context = unsafe {
+            let raw = pw::sys::pw_context_new(
+                (*thread_loop.loop_()).as_raw_ptr(),
+                std::ptr::null_mut(),
+                0,
+            );
+            pw::context::ContextBox::from_raw(
+                std::ptr::NonNull::new(raw).context("pw_context_new failed")?,
+            )
+        };
+        let core = unsafe {
+            let raw = pw::sys::pw_context_connect(context.as_raw_ptr(), std::ptr::null_mut(), 0);
+            pw::core::CoreBox::from_raw(
+                std::ptr::NonNull::new(raw).context("pw_context_connect failed")?,
+            )
+        };
         let props = properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CATEGORY => "Capture",
             *pw::keys::MEDIA_ROLE => "Music",
             *pw::keys::STREAM_CAPTURE_SINK => "true",
         };
-        let stream = pw::stream::StreamBox::new(&core, "zancord-screen-audio", props)
-            .context("pw_stream_new failed")?;
+        let stream = unsafe {
+            let c_name = std::ffi::CString::new("zancord-screen-audio").unwrap();
+            let raw = pw::sys::pw_stream_new(core.as_raw_ptr(), c_name.as_ptr(), props.into_raw());
+            pw::stream::StreamBox::from_raw(
+                std::ptr::NonNull::new(raw).context("pw_stream_new failed")?,
+            )
+        };
 
         let user_data = AudioUserData {
-            format: AudioInfoRaw::new(),
+            format: pw::spa::param::audio::AudioInfoRaw::new(),
             audio_tx: self.audio_tx.clone(),
+            stream_error: Arc::clone(&self.stream_error),
             started: Instant::now(),
         };
         let listener = stream
@@ -114,19 +142,22 @@ impl LinuxSystemAudioCapturer {
 
         // Request float32; rate/channels stay open so the graph picks its
         // native values (the reported format arrives via param_changed).
-        let mut audio_info = AudioInfoRaw::new();
-        audio_info.set_format(AudioFormat::F32LE);
         let obj = Object {
             type_: SpaTypes::ObjectParamFormat.as_raw(),
             id: ParamType::EnumFormat.as_raw(),
-            properties: audio_info.into(),
+            properties: vec![Property {
+                key: pw::spa::sys::SPA_FORMAT_AUDIO_format,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: Value::Id(pw::spa::utils::Id(AudioFormat::F32LE.as_raw())),
+            }],
         };
         let values =
             PodSerializer::serialize(std::io::Cursor::new(Vec::new()), &Value::Object(obj))
                 .context("failed to serialize audio format pod")?
                 .0
                 .into_inner();
-        let mut params = [Pod::from_bytes(&values).context("failed to parse audio format pod")?];
+        let pod = Pod::from_bytes(&values).context("failed to parse audio format pod")?;
+        let mut params = [pod];
 
         stream
             .connect(
@@ -184,11 +215,13 @@ fn buffer_to_audio_frame(
 ) -> Option<CapturedAudioFrame> {
     let datas = buffer.datas_mut();
     let data = datas.first_mut()?;
-    let slice = data.data()?;
-    let size = data.chunk().size() as usize;
+    // Read chunk metadata before borrowing the data slice mutably.
+    let chunk = data.chunk();
+    let size = chunk.size() as usize;
     if size == 0 {
         return None;
     }
+    let slice = data.data()?;
     let bytes = &slice[..size.min(slice.len())];
     let mut pcm = Vec::with_capacity(bytes.len() / 4);
     for chunk in bytes.chunks_exact(4) {
