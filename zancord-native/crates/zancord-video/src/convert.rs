@@ -21,8 +21,6 @@ pub enum ConversionError {
     DimensionMismatch { expected: usize, actual: usize },
     #[error("invalid dimensions: {width}x{height}")]
     InvalidDimensions { width: u32, height: u32 },
-    #[error("conversion not implemented yet (Phase 3C.1)")]
-    NotImplemented,
 }
 
 /// BT.601 coefficients (limited range, 8-bit).
@@ -338,9 +336,9 @@ mod tests {
 
     #[test]
     fn rgb_black_and_white() {
-        let black = rgb_to_i420(&vec![0; 2 * 2 * 3], 2, 2).unwrap();
+        let black = rgb_to_i420(&[0; 2 * 2 * 3], 2, 2).unwrap();
         assert!(black.y.iter().all(|&p| p == 16)); // limited range black
-        let white = rgb_to_i420(&vec![255; 2 * 2 * 3], 2, 2).unwrap();
+        let white = rgb_to_i420(&[255; 2 * 2 * 3], 2, 2).unwrap();
         assert!(white.y.iter().all(|&p| p == 235)); // limited range white
     }
 

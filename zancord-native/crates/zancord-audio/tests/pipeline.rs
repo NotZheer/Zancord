@@ -68,11 +68,11 @@ async fn set_mesh_sender_reroutes_captured_frames() {
 
 #[tokio::test]
 async fn speaking_events_follow_voice_activity() {
-    let (mut producer, consumer) = RingBuffer::<f32>::new(FRAME_SAMPLES * 4);
+    let (_producer, consumer) = RingBuffer::<f32>::new(FRAME_SAMPLES * 4);
     let capture = MicCapture::from_ring(consumer, 48_000, 1);
     let (_tx, _rx) = mpsc::channel::<EncodedAudioFrame>(16);
     let (in_tx, in_rx) = mpsc::channel(16);
-    let (control_tx, control_rx) = mpsc::channel(16);
+    let (_control_tx, control_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel::<AudioEvent>(16);
 
     let mut pipeline = AudioPipeline::with_io(

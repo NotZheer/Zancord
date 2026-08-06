@@ -152,6 +152,7 @@ fn run_capture_loop(
     let mut congestion = CongestionState::new(SHARE_BITRATE);
     let mut audio_encoder = OpusEncoder::new_stereo(SCREEN_AUDIO_BITRATE)?;
     let mut audio_buf: Vec<i16> = Vec::with_capacity(FRAME_SIZE_STEREO * 2);
+    let mut screen_audio_seq = 0u64;
     let mut last_keyframe = Instant::now() - KEYFRAME_INTERVAL;
     let mut last_frame = Instant::now();
     let mut last_report = Instant::now();
@@ -231,7 +232,7 @@ fn run_capture_loop(
             }
         }
 
-        // System audio (macOS SCK; Linux monitor integration follows): the
+        // System audio (macOS SCK; Linux PipeWire sink monitor). The
         // capturer delivers interleaved f32 at 48 kHz.
         if let Some(audio_rx) = capturer.audio_sample_rx() {
             while let Ok(audio) = audio_rx.try_recv() {
@@ -244,11 +245,17 @@ fn run_capture_loop(
                         // for the next one instead of dropping it.
                         let frame: Vec<i16> = audio_buf.drain(..FRAME_SIZE_STEREO).collect();
                         let packet = audio_encoder.encode(&frame)?;
+                        // Monotonic sequence per 20 ms frame. The transport
+                        // currently stamps RTP sequence numbers itself, but
+                        // keeping these truthful costs nothing and matters for
+                        // any non-RTP path (the receive side uses sequences
+                        // for PLC gap concealment).
+                        screen_audio_seq += 1;
                         if screen_audio_tx
                             .blocking_send(zancord_protocol::EncodedAudioFrame {
                                 data: packet,
-                                sequence: 0,
-                                timestamp_ms: 0,
+                                sequence: screen_audio_seq,
+                                timestamp_ms: screen_audio_seq * 20,
                             })
                             .is_err()
                         {
