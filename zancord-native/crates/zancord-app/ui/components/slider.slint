@@ -1,7 +1,4 @@
-// ZSlider (Phase 6): minimal custom slider — track + fill + handle, drag or
-// click to set. Styled via Theme; used by the settings popover (noise-gate
-// threshold) and the per-peer volume control. Emits `changed` while the user
-// drags; it does not write its own `value` (the parent owns the state).
+// ZSlider v3 — flat hairline slider: charcoal track, blurple fill, white knob.
 
 import { Theme } from "../theme.slint";
 
@@ -39,12 +36,14 @@ export component ZSlider inherits Rectangle {
 
     // Handle.
     Rectangle {
-        x: (parent.width * root.normalized() - 6px).clamp(0px, parent.width - 12px);
-        y: (parent.height - 12px) / 2;
-        width: 12px;
-        height: 12px;
-        border-radius: 6px;
-        background: touch.pressed ? Theme.accent-hover : Theme.text-primary;
+        x: (parent.width * root.normalized() - 7px).clamp(0px, parent.width - 14px);
+        y: (parent.height - 14px) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: touch.pressed ? Theme.accent-strong : #ffffff;
+        border-width: 1px;
+        border-color: Theme.border-strong;
     }
 
     touch := TouchArea {

@@ -1,32 +1,36 @@
-// Chat panel (Phase 4.5): message list with self/other alignment, timestamp,
-// and an input bar (Enter sends).
+// Chat panel v3 — PWA-style right sidebar: flush panel, uppercase header,
+// message bubbles, rounded input with a blurple send button.
 
 import { Theme } from "../theme.slint";
 import { ListView } from "std-widgets.slint";
 import { ChatMessage } from "../types.slint";
+import { SendIcon } from "icons.slint";
 
 export component ChatPanel inherits Rectangle {
     in property <[ChatMessage]> messages;
     callback send_chat(string);
 
-    preferred-width: 320px;
-    background: Theme.bg-secondary;
+    background: Theme.bg-card;
 
-    HorizontalLayout {
-        // Left divider.
-        Rectangle {
-            width: 1px;
-            height: 100%;
-            background: Theme.border;
-        }
-        VerticalLayout {
-            padding: Theme.spacing-md;
-            spacing: Theme.spacing-sm;
+    // Left divider (Slint has no per-side borders).
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 1px;
+        height: 100%;
+        background: Theme.border;
+    }
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
 
         Text {
-            text: "Chat";
-            color: Theme.text-primary;
-            font-size: Theme.font-size-lg;
+            text: "CHAT";
+            color: Theme.text-faint;
+            font-size: Theme.font-size-xs;
+            letter-spacing: 1.5px;
+            font-weight: 700;
         }
 
         ListView {
@@ -35,9 +39,11 @@ export component ChatPanel inherits Rectangle {
             for m in root.messages: HorizontalLayout {
                 alignment: m.is_self ? end : start;
                 Rectangle {
-                    max-width: 260px;
+                    max-width: 250px;
                     border-radius: Theme.radius-md;
-                    background: m.is_self ? Theme.accent : Theme.bg-surface;
+                    background: m.is_self ? Theme.accent-soft : Theme.bg-secondary;
+                    border-width: 1px;
+                    border-color: m.is_self ? Theme.accent : Theme.border;
                     VerticalLayout {
                         padding: Theme.spacing-sm;
                         spacing: 2px;
@@ -45,19 +51,22 @@ export component ChatPanel inherits Rectangle {
                             spacing: Theme.spacing-sm;
                             Text {
                                 text: m.sender;
-                                color: m.is_self ? Theme.text-primary : Theme.text-secondary;
-                                font-size: Theme.font-size-sm;
+                                color: m.is_self ? Theme.accent : Theme.text-secondary;
+                                font-size: Theme.font-size-xs;
+                                font-weight: 700;
                             }
+                            Rectangle { horizontal-stretch: 1; }
                             Text {
                                 text: m.timestamp;
-                                color: Theme.text-secondary;
-                                font-size: Theme.font-size-sm;
+                                color: Theme.text-faint;
+                                font-size: Theme.font-size-xs;
                             }
                         }
                         Text {
                             text: m.content;
                             color: Theme.text-primary;
                             font-size: Theme.font-size-md;
+                            wrap: word-wrap;
                         }
                     }
                 }
@@ -66,18 +75,32 @@ export component ChatPanel inherits Rectangle {
 
         HorizontalLayout {
             spacing: Theme.spacing-sm;
-            input := TextInput {
+            Rectangle {
                 horizontal-stretch: 1;
-                color: Theme.text-primary;
-                accepted => {
-                    root.send_chat(self.text);
-                    self.text = "";
+                height: 40px;
+                border-radius: Theme.radius-pill;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: Theme.bg-secondary;
+                HorizontalLayout {
+                    padding-left: Theme.spacing-md;
+                    padding-right: Theme.spacing-sm;
+                    input := TextInput {
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
+                        color: Theme.text-primary;
+                        font-size: Theme.font-size-md;
+                        accepted => {
+                            root.send_chat(self.text);
+                            self.text = "";
+                        }
+                    }
                 }
             }
             Rectangle {
                 width: 40px;
                 height: 40px;
-                border-radius: 20px;
+                border-radius: Theme.radius-pill;
                 background: Theme.accent;
                 touch := TouchArea {
                     clicked => {
@@ -86,18 +109,18 @@ export component ChatPanel inherits Rectangle {
                     }
                     mouse-cursor: pointer;
                 }
-                Text {
-                    text: "➤";
-                    color: Theme.text-primary;
-                    font-size: Theme.font-size-lg;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                SendIcon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 17px;
+                    height: 17px;
+                    stroke-width: 2px;
+                    tint: #ffffff;
                 }
                 states [
-                    hover when touch.has-hover: { background: Theme.accent-hover; }
+                    hover when touch.has-hover: { background: Theme.accent-strong; }
                 ]
             }
-        }
         }
     }
 }

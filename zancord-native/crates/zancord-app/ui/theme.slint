@@ -1,36 +1,59 @@
-// Zancord design system (Phase 4.1): dark glassmorphism palette, typography,
-// spacing, and radius tokens. Every component reads from this global so the
-// whole UI re-themes from one place.
+// Zancord design system v3 — mirrors the PWA: Discord-style charcoal palette,
+// blurple accent, hairline glass borders, flat surfaces (no gradients).
+// Every component reads from this global so the whole UI re-themes in place.
 
 export global Theme {
-    // Colors
-    out property <color> bg-primary: #0f0f17;
-    out property <color> bg-secondary: #1a1a2e;
-    out property <color> bg-surface: #16213e80; // semi-transparent for glass
-    out property <color> accent: #7c3aed;
-    out property <color> accent-hover: #8b5cf6;
-    out property <color> text-primary: #e2e8f0;
-    out property <color> text-secondary: #94a3b8;
-    out property <color> success: #22c55e;
-    out property <color> warning: #f59e0b;
-    out property <color> error: #ef4444;
-    out property <color> info: #3b82f6;
-    out property <color> border: #ffffff18;
+    // --- Surfaces (PWA tokens) ---
+    out property <color> bg-primary: #1e1f22;    // window base
+    out property <color> bg-secondary: #2b2d31;  // raised panels
+    out property <color> bg-card: #232428;       // cards / tiles
+    out property <color> bg-hover: #35373c;      // hover state
+    out property <color> bg-overlay: #000000a6;  // scrims
 
-    // Typography
-    out property <length> font-size-sm: 12px;
-    out property <length> font-size-md: 14px;
-    out property <length> font-size-lg: 18px;
-    out property <length> font-size-xl: 24px;
+    // --- Hairlines ---
+    out property <color> border: #ffffff0f;
+    out property <color> border-strong: #ffffff29;
 
-    // Spacing
+    // --- Accent (blurple) + status (PWA tokens) ---
+    out property <color> accent: #5865f2;
+    out property <color> accent-strong: #4752c4;
+    out property <color> accent-soft: #5865f229;
+    out property <color> success: #23a55a;
+    out property <color> warning: #f0b232;
+    out property <color> error: #f23f42;
+
+    // --- Text ---
+    out property <color> text-primary: #f2f3f5;
+    out property <color> text-secondary: #949ba4;
+    out property <color> text-faint: #6d7178;
+
+    // --- Typography (11 / 13 / 15 / 20 / 30) ---
+    out property <length> font-size-xs: 11px;
+    out property <length> font-size-sm: 13px;
+    out property <length> font-size-md: 15px;
+    out property <length> font-size-lg: 20px;
+    out property <length> font-size-xl: 30px;
+
+    // --- Spacing ---
     out property <length> spacing-xs: 4px;
     out property <length> spacing-sm: 8px;
     out property <length> spacing-md: 16px;
     out property <length> spacing-lg: 24px;
 
-    // Borders
+    // --- Radii (PWA tokens) ---
     out property <length> radius-sm: 8px;
     out property <length> radius-md: 12px;
     out property <length> radius-lg: 16px;
+    out property <length> radius-pill: 20px;
+
+    // --- Depth ---
+    out property <length> shadow-blur-sm: 10px;
+    out property <length> shadow-blur-md: 24px;
+    out property <length> shadow-blur-lg: 48px;
+    out property <length> shadow-y: 4px;
+    out property <color> shadow-color: #00000080;
+    out property <color> glow-color: #5865f24d;
+
+    // --- Brushes ---
+    out property <brush> gradient-scrim: @linear-gradient(0deg, #000000b3 0%, #00000000 55%);
 }

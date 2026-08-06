@@ -1,5 +1,4 @@
-// Toast notifications (Phase 4.7): colored card; stacking and auto-dismiss
-// are driven from Rust (the model + a per-toast timer there).
+// Toast v3 — flat charcoal pill with a colored status dot (PWA style).
 
 import { Theme } from "../theme.slint";
 
@@ -7,18 +6,41 @@ export component ToastCard inherits Rectangle {
     in property <string> text;
     in property <string> kind; // "info" | "success" | "warning" | "error"
 
-    border-radius: Theme.radius-md;
-    border-width: 1px;
-    border-color: Theme.border;
-    background: root.kind == "error" ? #ef4444d0
-        : (root.kind == "warning" ? #f59e0bd0
-        : (root.kind == "success" ? #22c55ed0
-        : #3b82f6d0));
+    function kind_color(kind: string) -> color {
+        if kind == "error" { return Theme.error; }
+        if kind == "warning" { return Theme.warning; }
+        if kind == "success" { return Theme.success; }
+        return Theme.accent;
+    }
 
-    Text {
-        text: root.text;
-        color: Theme.text-primary;
-        font-size: Theme.font-size-md;
-        horizontal-alignment: center;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    background: Theme.bg-secondary;
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: Theme.shadow-y;
+    drop-shadow-blur: Theme.shadow-blur-sm;
+    drop-shadow-color: Theme.shadow-color;
+
+    HorizontalLayout {
+        padding-left: Theme.spacing-md;
+        padding-right: Theme.spacing-md;
+        padding-top: Theme.spacing-sm;
+        padding-bottom: Theme.spacing-sm;
+        spacing: Theme.spacing-sm;
+        alignment: center;
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.kind_color(root.kind);
+        }
+        Text {
+            text: root.text;
+            color: Theme.text-primary;
+            font-size: Theme.font-size-sm;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 }

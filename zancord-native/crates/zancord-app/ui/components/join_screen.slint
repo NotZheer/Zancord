@@ -1,13 +1,45 @@
-// Join screen (Phase 6): signaling endpoint / room / display-name entry shown
-// before the call view. Replaces the CLI-arg-only launch flow while keeping
-// `zancord-ui <ws> <room> <name>` working for scripts (auto-join skips this).
+// Join screen v3 — flat charcoal like the PWA: centered card, ghost inputs,
+// blurple join button.
 
 import { Theme } from "../theme.slint";
 
+// Field shell: label + rounded input with a focus ring.
+component Field inherits Rectangle {
+    in property <string> label;
+    in property <string> text;
+    callback edited(string);
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-sm;
+    }
+    Rectangle {
+        height: 44px;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.border;
+        background: Theme.bg-secondary;
+        animate border-color { duration: 100ms; }
+        HorizontalLayout {
+            padding-left: Theme.spacing-md;
+            padding-right: Theme.spacing-md;
+            input := TextInput {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                text: root.text;
+                color: Theme.text-primary;
+                font-size: Theme.font-size-md;
+                accepted => { root.edited(self.text); }
+            }
+        }
+    }
+}
+
 export component JoinScreen inherits Rectangle {
-    in property <string> endpoint;
-    in property <string> room;
-    in property <string> username;
+    in-out property <string> endpoint;
+    in-out property <string> room;
+    in-out property <string> username;
     // Non-empty shows as an error banner (join failures from Rust).
     in property <string> error;
     callback join_clicked(string, string, string);
@@ -26,7 +58,7 @@ export component JoinScreen inherits Rectangle {
             Rectangle {
                 width: 440px;
                 border-radius: Theme.radius-lg;
-                background: Theme.bg-surface;
+                background: Theme.bg-card;
                 border-width: 1px;
                 border-color: Theme.border;
                 VerticalLayout {
@@ -36,8 +68,10 @@ export component JoinScreen inherits Rectangle {
                     Text {
                         text: "Zancord";
                         color: Theme.text-primary;
-                        font-size: 32px;
+                        font-size: 34px;
+                        font-weight: 700;
                         horizontal-alignment: center;
+                        letter-spacing: 0.5px;
                     }
                     Text {
                         text: "Peer-to-peer voice, video & screen share over Tailscale";
@@ -47,92 +81,46 @@ export component JoinScreen inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    Text {
-                        text: "Signaling server";
-                        color: Theme.text-secondary;
-                        font-size: Theme.font-size-sm;
-                    }
-                    Rectangle {
-                        height: 40px;
-                        border-radius: Theme.radius-sm;
-                        background: Theme.bg-secondary;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        HorizontalLayout {
-                            padding-left: Theme.spacing-sm;
-                            padding-right: Theme.spacing-sm;
-                            endpoint_input := TextInput {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 1;
-                                text: root.endpoint;
-                                color: Theme.text-primary;
-                                font-size: Theme.font-size-md;
-                                accepted => { root.try_join(); }
-                            }
-                        }
+                    Field {
+                        label: "SIGNALING SERVER";
+                        text: root.endpoint;
+                        edited(value) => { root.endpoint = value; }
                     }
 
-                    Text {
-                        text: "Room";
-                        color: Theme.text-secondary;
-                        font-size: Theme.font-size-sm;
-                    }
-                    Rectangle {
-                        height: 40px;
-                        border-radius: Theme.radius-sm;
-                        background: Theme.bg-secondary;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        HorizontalLayout {
-                            padding-left: Theme.spacing-sm;
-                            padding-right: Theme.spacing-sm;
-                            room_input := TextInput {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 1;
-                                text: root.room;
-                                color: Theme.text-primary;
-                                font-size: Theme.font-size-md;
-                                accepted => { root.try_join(); }
-                            }
-                        }
+                    Field {
+                        label: "ROOM";
+                        text: root.room;
+                        edited(value) => { root.room = value; }
                     }
 
-                    Text {
-                        text: "Display name";
-                        color: Theme.text-secondary;
-                        font-size: Theme.font-size-sm;
-                    }
-                    Rectangle {
-                        height: 40px;
-                        border-radius: Theme.radius-sm;
-                        background: Theme.bg-secondary;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        HorizontalLayout {
-                            padding-left: Theme.spacing-sm;
-                            padding-right: Theme.spacing-sm;
-                            name_input := TextInput {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 1;
-                                text: root.username;
-                                color: Theme.text-primary;
-                                font-size: Theme.font-size-md;
-                                accepted => { root.try_join(); }
-                            }
-                        }
+                    Field {
+                        label: "DISPLAY NAME";
+                        text: root.username;
+                        edited(value) => { root.username = value; }
                     }
 
-                    if root.error != "": Text {
-                        text: root.error;
-                        color: Theme.error;
-                        font-size: Theme.font-size-sm;
-                        wrap: word-wrap;
+                    if root.error != "": Rectangle {
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.error;
+                        background: #f23f4214;
+                        VerticalLayout {
+                            padding: Theme.spacing-sm;
+                            Text {
+                                text: root.error;
+                                color: Theme.error;
+                                font-size: Theme.font-size-sm;
+                                wrap: word-wrap;
+                            }
+                        }
                     }
 
                     Rectangle {
                         height: 44px;
-                        border-radius: Theme.radius-md;
+                        border-radius: Theme.radius-sm;
                         background: root.ready ? Theme.accent : Theme.bg-secondary;
+                        border-width: 1px;
+                        border-color: root.ready ? transparent : Theme.border;
                         join_touch := TouchArea {
                             enabled: root.ready;
                             clicked => { root.try_join(); }
@@ -140,13 +128,14 @@ export component JoinScreen inherits Rectangle {
                         }
                         Text {
                             text: "Join";
-                            color: Theme.text-primary;
-                            font-size: Theme.font-size-lg;
+                            color: root.ready ? #ffffff : Theme.text-faint;
+                            font-size: Theme.font-size-md;
+                            font-weight: 600;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
                         states [
-                            hover when join_touch.has-hover && root.ready: { background: Theme.accent-hover; }
+                            hover when join_touch.has-hover && root.ready: { background: Theme.accent-strong; }
                         ]
                     }
                 }

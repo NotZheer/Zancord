@@ -1,8 +1,9 @@
-// Video tile (Phase 4.3): remote/local video with avatar fallback, username
-// overlay, muted indicator, screen-share badge, and a speaking ring.
+// Video tile v3 — PWA card style: flat charcoal panel, hairline border,
+// avatar fallback, speaking ring in blurple.
 
 import { Theme } from "../theme.slint";
 import { ZSlider } from "slider.slint";
+import { MicOffIcon, ScreenIcon, SpeakerIcon } from "icons.slint";
 
 export component VideoTile inherits Rectangle {
     in property <string> username;
@@ -14,6 +15,7 @@ export component VideoTile inherits Rectangle {
     in property <bool> is_screen_share;
     in property <string> connection_state;
     in property <string> peer_id;
+    in property <int> avatar_index: 0;
     in property <float> volume: 1.0;
     property <bool> volume_visible: false;
     // Local slider state (seeded from `volume`).
@@ -27,11 +29,25 @@ export component VideoTile inherits Rectangle {
         return Theme.warning; // connecting / unknown
     }
 
+    // Avatar palette (Discord-ish; cycled by tile index).
+    function avatar_color(i: int) -> color {
+        if Math.mod(i, 6) == 0 { return #5865f2; }
+        if Math.mod(i, 6) == 1 { return #3b82f6; }
+        if Math.mod(i, 6) == 2 { return #23a55a; }
+        if Math.mod(i, 6) == 3 { return #f0b232; }
+        if Math.mod(i, 6) == 4 { return #ec4899; }
+        return #14b8a6;
+    }
+
     border-radius: Theme.radius-md;
     border-width: 2px;
     border-color: root.is_speaking ? Theme.accent : Theme.border;
-    animate border-color { duration: 400ms; }
-    background: Theme.bg-secondary;
+    background: Theme.bg-card;
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: root.is_speaking ? 0px : 2px;
+    drop-shadow-blur: root.is_speaking ? Theme.shadow-blur-sm : 6px;
+    drop-shadow-color: root.is_speaking ? Theme.glow-color : Theme.shadow-color;
+    animate border-color { duration: 200ms; }
     clip: true;
     min-width: 240px;
     min-height: 160px;
@@ -51,14 +67,15 @@ export component VideoTile inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Rectangle {
-                width: 72px;
-                height: 72px;
-                border-radius: 36px;
-                background: Theme.accent;
+                width: 60px;
+                height: 60px;
+                border-radius: 30px;
+                background: root.avatar_color(root.avatar_index);
                 Text {
                     text: root.initial == "" ? "?" : root.initial;
-                    color: Theme.text-primary;
-                    font-size: Theme.font-size-xl;
+                    color: #ffffff;
+                    font-size: 24px;
+                    font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -66,12 +83,12 @@ export component VideoTile inherits Rectangle {
         }
     }
 
-    // Bottom overlay: username + status badges.
+    // Bottom scrim + name + status chips.
     Rectangle {
-        y: parent.height - 36px;
-        height: 36px;
+        y: parent.height - 40px;
+        height: 40px;
         width: 100%;
-        background: #0f0f1780;
+        background: Theme.gradient-scrim;
         HorizontalLayout {
             padding-left: Theme.spacing-sm;
             padding-right: Theme.spacing-sm;
@@ -79,61 +96,79 @@ export component VideoTile inherits Rectangle {
             alignment: center;
             Text {
                 text: root.username;
-                color: Theme.text-primary;
+                color: #ffffff;
                 font-size: Theme.font-size-sm;
+                font-weight: 600;
                 vertical-alignment: center;
             }
-            Text {
-                text: root.is_muted ? "🔇" : "";
-                color: Theme.error;
-                font-size: Theme.font-size-sm;
-                vertical-alignment: center;
+            if root.is_muted: MicOffIcon {
+                width: 13px;
+                height: 13px;
+                stroke-width: 2.4px;
+                tint: Theme.error;
             }
             Rectangle { horizontal-stretch: 1; }
-            // Connection indicator: green connected, amber connecting,
-            // red failed/disconnected (a Text dot so it centers like the
-            // other badges).
-            Text {
-                text: "●";
-                color: root.connection_color(root.connection_state);
-                font-size: Theme.font-size-sm;
-                vertical-alignment: center;
+            // Connection dot.
+            Rectangle {
+                width: 7px;
+                height: 7px;
+                border-radius: 4px;
+                background: root.connection_color(root.connection_state);
             }
-            Text {
-                text: root.is_screen_share ? "🖥️" : "";
-                font-size: Theme.font-size-sm;
-                vertical-alignment: center;
+            if root.is_screen_share: ScreenIcon {
+                width: 13px;
+                height: 13px;
+                stroke-width: 2.4px;
+                tint: Theme.accent;
             }
             // Per-peer volume control (opens a mini slider).
-            Text {
-                text: "🔊";
-                font-size: Theme.font-size-sm;
-                vertical-alignment: center;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 11px;
                 vol_touch := TouchArea {
                     clicked => { root.volume_visible = !root.volume_visible; }
                     mouse-cursor: pointer;
                 }
+                SpeakerIcon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 13px;
+                    height: 13px;
+                    stroke-width: 2.4px;
+                    tint: root.volume_visible ? Theme.accent : #ffffffcc;
+                }
+                states [
+                    hover when vol_touch.has-hover: { background: #ffffff14; }
+                ]
             }
         }
     }
 
-    // Volume popover: free-positioned above the overlay (not in a layout).
+    // Volume popover above the overlay.
     if root.volume_visible: Rectangle {
-        x: (parent.width - 150px) / 2;
-        y: parent.height - 90px;
-        width: 150px;
-        height: 36px;
+        x: (parent.width - 170px) / 2;
+        y: parent.height - 92px;
+        width: 170px;
+        height: 40px;
         border-radius: Theme.radius-sm;
-        background: Theme.bg-surface;
+        background: Theme.bg-secondary;
         border-width: 1px;
-        border-color: Theme.border;
+        border-color: Theme.border-strong;
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: Theme.shadow-y;
+        drop-shadow-blur: Theme.shadow-blur-sm;
+        drop-shadow-color: Theme.shadow-color;
         HorizontalLayout {
-            padding: Theme.spacing-xs;
+            padding-left: Theme.spacing-sm;
+            padding-right: Theme.spacing-sm;
             spacing: Theme.spacing-xs;
-            Text {
-                text: "🔊";
-                font-size: Theme.font-size-sm;
-                vertical-alignment: center;
+            alignment: center;
+            SpeakerIcon {
+                width: 13px;
+                height: 13px;
+                stroke-width: 2.4px;
+                tint: Theme.text-secondary;
             }
             ZSlider {
                 value: root.vol;
@@ -147,7 +182,7 @@ export component VideoTile inherits Rectangle {
             Text {
                 text: Math.round(root.vol * 100.0);
                 color: Theme.text-primary;
-                font-size: Theme.font-size-sm;
+                font-size: Theme.font-size-xs;
                 vertical-alignment: center;
             }
         }

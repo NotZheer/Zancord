@@ -1,6 +1,5 @@
-// SettingsPanel (Phase 6): noise gate (toggle + threshold), high-pass filter,
-// and live mic/output device selection. All changes apply immediately via the
-// audio pipeline controls.
+// SettingsPanel v3 — PWA-style right sidebar: flush full-height panel with a
+// header and uppercase section labels.
 
 import { Theme } from "../theme.slint";
 import { ZSlider } from "slider.slint";
@@ -27,31 +26,63 @@ export component SettingsPanel inherits Rectangle {
     property <float> threshold_db: -40.0;
     init => { self.threshold_db = root.noise_gate_threshold_db; }
 
-    width: 320px;
-    border-radius: Theme.radius-md;
-    background: Theme.bg-surface;
-    border-width: 1px;
-    border-color: Theme.border;
+    background: Theme.bg-card;
+
+    // Left divider (Slint has no per-side borders).
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 1px;
+        height: 100%;
+        background: Theme.border;
+    }
 
     VerticalLayout {
         padding: Theme.spacing-md;
-        spacing: Theme.spacing-sm;
+        spacing: Theme.spacing-md;
 
-        Text {
-            text: "Audio settings";
-            color: Theme.text-primary;
-            font-size: Theme.font-size-md;
+        // Header.
+        HorizontalLayout {
+            spacing: Theme.spacing-xs;
+            alignment: center;
+            Rectangle {
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: Theme.accent;
+            }
+            Text {
+                text: "ZANCORD";
+                color: Theme.text-primary;
+                font-size: Theme.font-size-sm;
+                letter-spacing: 1px;
+                font-weight: 700;
+            }
+            Text {
+                text: "SETTINGS";
+                color: Theme.text-faint;
+                font-size: Theme.font-size-sm;
+                letter-spacing: 1px;
+                font-weight: 700;
+            }
         }
 
-        // Noise gate: toggle + threshold slider (visible while enabled).
+        // Noise gate.
+        Text {
+            text: "VOICE PROCESSING";
+            color: Theme.text-faint;
+            font-size: Theme.font-size-xs;
+            letter-spacing: 1.5px;
+            font-weight: 700;
+        }
         Rectangle {
             width: 100%;
             HorizontalLayout {
                 spacing: Theme.spacing-sm;
                 Text {
                     text: "Noise gate";
-                    color: Theme.text-secondary;
-                    font-size: Theme.font-size-sm;
+                    color: Theme.text-primary;
+                    font-size: Theme.font-size-md;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -79,23 +110,21 @@ export component SettingsPanel inherits Rectangle {
                     }
                 }
                 Text {
-                    text: Math.round(root.threshold_db);
+                    text: Math.round(root.threshold_db) + " dB";
                     color: Theme.text-primary;
-                    font-size: Theme.font-size-sm;
+                    font-size: Theme.font-size-xs;
                     vertical-alignment: center;
                 }
             }
         }
-
-        // High-pass filter.
         Rectangle {
             width: 100%;
             HorizontalLayout {
                 spacing: Theme.spacing-sm;
                 Text {
                     text: "High-pass filter";
-                    color: Theme.text-secondary;
-                    font-size: Theme.font-size-sm;
+                    color: Theme.text-primary;
+                    font-size: Theme.font-size-md;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -106,6 +135,20 @@ export component SettingsPanel inherits Rectangle {
             }
         }
 
+        Rectangle {
+            height: 1px;
+            width: 100%;
+            background: Theme.border;
+        }
+
+        // Devices.
+        Text {
+            text: "DEVICES";
+            color: Theme.text-faint;
+            font-size: Theme.font-size-xs;
+            letter-spacing: 1.5px;
+            font-weight: 700;
+        }
         Text {
             text: "Microphone";
             color: Theme.text-secondary;

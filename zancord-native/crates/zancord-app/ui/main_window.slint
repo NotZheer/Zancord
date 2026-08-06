@@ -1,5 +1,7 @@
-// Main window (Phase 4.2): top bar, call grid, toggleable chat panel, control
-// dock, toast overlay, and global keyboard shortcuts (Phase 4.9).
+// Main window v3 — mirrors the PWA layout: call stage as the base layer,
+// then floating overlays in paint order (top nav → dock → sidebars →
+// self view → toasts). In Slint, later tree order paints on top, which is
+// how the popovers stay above the stage.
 
 import { Theme } from "theme.slint";
 import { VideoTile } from "components/video_tile.slint";
@@ -10,9 +12,34 @@ import { ToastCard } from "components/toast.slint";
 import { PeerData, ChatMessage, Toast } from "types.slint";
 import { SettingsPanel } from "components/settings_panel.slint";
 import { JoinScreen } from "components/join_screen.slint";
+import { LinkIcon, CameraIcon, ScreenIcon, GearIcon, ChatIcon } from "components/icons.slint";
+
+// Ghost icon button (top nav).
+component NavButton inherits Rectangle {
+    in property <bool> active: false;
+    callback clicked();
+
+    width: 36px;
+    height: 36px;
+    border-radius: Theme.radius-sm;
+    background: root.active ? Theme.accent-soft : transparent;
+    animate background { duration: 100ms; }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    states [
+        hover when touch.has-hover && !touch.pressed: {
+            background: root.active ? Theme.accent-soft : Theme.bg-hover;
+        }
+    ]
+}
 
 export component MainWindow inherits Window {
     title: "Zancord";
+    default-font-family: "Outfit";
     min-width: 960px;
     min-height: 600px;
     preferred-width: 1280px;
@@ -37,7 +64,7 @@ export component MainWindow inherits Window {
     in property <[string]> screen_sources;
     in property <string> current_screen_source_name;
     property <bool> screen_picker_visible: false;
-    // Settings popover (top bar).
+    // Settings / chat sidebars (right edge).
     in property <bool> noise_gate_enabled;
     in property <float> noise_gate_threshold_db;
     in property <bool> hpf_enabled;
@@ -98,277 +125,406 @@ export component MainWindow inherits Window {
         height: 100%;
         background: Theme.bg-primary;
 
-        VerticalLayout {
+        // ================= 1. Call stage (base layer) =================
+        Rectangle {
             width: 100%;
             height: 100%;
-            padding: Theme.spacing-md;
-            spacing: Theme.spacing-md;
-
-            // Top bar.
-            Rectangle {
-                height: 48px;
-                border-radius: Theme.radius-md;
-                background: Theme.bg-surface;
-                border-width: 1px;
-                border-color: Theme.border;
-                HorizontalLayout {
-                    padding-left: Theme.spacing-md;
-                    padding-right: Theme.spacing-md;
-                    spacing: Theme.spacing-md;
-                    alignment: center;
-                    Text {
-                        text: "🏠 " + root.room_name;
-                        color: Theme.text-primary;
-                        font-size: Theme.font-size-lg;
-                    }
-                    Text {
-                        text: root.peer_count == 1 ? "1 peer" : root.peer_count + " peers";
-                        color: Theme.text-secondary;
-                        font-size: Theme.font-size-sm;
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                    Rectangle {
-                        Text {
-                            text: "🔗 Copy link";
-                            color: Theme.text-secondary;
-                            font-size: Theme.font-size-sm;
-                        }
-                        touch := TouchArea {
-                            clicked => { root.copy_invite_link(); }
-                            mouse-cursor: pointer;
-                        }
-                        states [
-                            hover when touch.has-hover: { background: Theme.bg-secondary; }
-                        ]
-                    }
-                    // Camera device picker: button shows the current camera,
-                    // clicking it drops down the enumerated list.
-                    Rectangle {
-                        width: 170px;
-                        Text {
-                            text: "🎥 " + root.current_camera_name;
-                            color: Theme.text-secondary;
-                            font-size: Theme.font-size-sm;
-                            overflow: elide;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        cam_touch := TouchArea {
-                            clicked => { root.camera_picker_visible = !root.camera_picker_visible; }
-                            mouse-cursor: pointer;
-                        }
-                        states [
-                            hover when cam_touch.has-hover: { background: Theme.bg-secondary; }
-                        ]
-                        if root.camera_picker_visible: Rectangle {
-                            y: 44px;
-                            width: 190px;
-                            border-radius: Theme.radius-md;
-                            background: Theme.bg-surface;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            VerticalLayout {
-                                padding: Theme.spacing-xs;
-                                spacing: Theme.spacing-xs;
-                                for c[idx] in root.cameras: Rectangle {
-                                    width: 100%;
-                                    border-radius: Theme.radius-sm;
-                                    Text {
-                                        text: c;
-                                        color: Theme.text-primary;
-                                        font-size: Theme.font-size-sm;
-                                        overflow: elide;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                    pick := TouchArea {
-                                        clicked => {
-                                            root.camera_selected(idx);
-                                            root.camera_picker_visible = false;
-                                        }
-                                        mouse-cursor: pointer;
-                                    }
-                                    states [
-                                        hover when pick.has-hover: { background: Theme.bg-secondary; }
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                    // Screen-source picker: displays + windows on macOS; on
-                    // Linux the portal owns selection, so the entry is the
-                    // system picker itself.
-                    Rectangle {
-                        width: 170px;
-                        Text {
-                            text: "🖥️ " + root.current_screen_source_name;
-                            color: Theme.text-secondary;
-                            font-size: Theme.font-size-sm;
-                            overflow: elide;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        scr_touch := TouchArea {
-                            clicked => { root.screen_picker_visible = !root.screen_picker_visible; }
-                            mouse-cursor: pointer;
-                        }
-                        states [
-                            hover when scr_touch.has-hover: { background: Theme.bg-secondary; }
-                        ]
-                        if root.screen_picker_visible: Rectangle {
-                            y: 44px;
-                            width: 240px;
-                            border-radius: Theme.radius-md;
-                            background: Theme.bg-surface;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            VerticalLayout {
-                                padding: Theme.spacing-xs;
-                                spacing: Theme.spacing-xs;
-                                for s[idx] in root.screen_sources: Rectangle {
-                                    width: 100%;
-                                    border-radius: Theme.radius-sm;
-                                    Text {
-                                        text: s;
-                                        color: Theme.text-primary;
-                                        font-size: Theme.font-size-sm;
-                                        overflow: elide;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                    scr_pick := TouchArea {
-                                        clicked => {
-                                            root.screen_source_selected(idx);
-                                            root.screen_picker_visible = false;
-                                        }
-                                        mouse-cursor: pointer;
-                                    }
-                                    states [
-                                        hover when scr_pick.has-hover: { background: Theme.bg-secondary; }
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                    // Settings popover (⚙️): audio processing + devices.
-                    Rectangle {
-                        Text {
-                            text: "⚙️";
-                            color: Theme.text-primary;
-                            font-size: Theme.font-size-lg;
-                        }
-                        set_touch := TouchArea {
-                            clicked => { root.settings_visible = !root.settings_visible; }
-                            mouse-cursor: pointer;
-                        }
-                        states [
-                            hover when set_touch.has-hover: { background: Theme.bg-secondary; }
-                        ]
-                        if root.settings_visible: SettingsPanel {
-                            x: -290px;
-                            y: 44px;
-                            noise_gate_enabled: root.noise_gate_enabled;
-                            noise_gate_threshold_db: root.noise_gate_threshold_db;
-                            hpf_enabled: root.hpf_enabled;
-                            input_devices: root.input_devices;
-                            current_input_device: root.current_input_device;
-                            output_devices: root.output_devices;
-                            current_output_device: root.current_output_device;
-                            toggle_noise_gate => { root.toggle_noise_gate(); }
-                            set_noise_gate_threshold(v) => { root.set_noise_gate_threshold(v); }
-                            toggle_hpf => { root.toggle_hpf(); }
-                            select_input_device(idx) => { root.select_input_device(idx); }
-                            select_output_device(idx) => { root.select_output_device(idx); }
-                        }
-                    }
-                    Rectangle {
-                        Text {
-                            text: "💬";
-                            color: Theme.text-primary;
-                            font-size: Theme.font-size-lg;
-                        }
-                        chat_touch := TouchArea {
-                            clicked => { root.toggle_chat(); }
-                            mouse-cursor: pointer;
-                        }
-                        states [
-                            hover when chat_touch.has-hover: { background: Theme.bg-secondary; }
-                        ]
-                    }
-                }
-            }
-
-            // Call grid + chat.
-            HorizontalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                spacing: Theme.spacing-md;
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-                    border-radius: Theme.radius-lg;
-                    background: Theme.bg-secondary;
-                    clip: true;
-
-                    if root.peers.length == 0: VerticalLayout {
-                        width: 100%;
-                        height: 100%;
-                        alignment: center;
-                        Text {
-                            text: "Waiting for others to join…";
-                            color: Theme.text-secondary;
-                            font-size: Theme.font-size-lg;
-                        }
-                    }
-                    if root.peers.length > 0: GridLayout {
-                        width: 100%;
-                        height: 100%;
-                        padding: Theme.spacing-md;
-                        spacing: Theme.spacing-md;
-                        for p[idx] in root.peers: VideoTile {
-                            row: idx / 2;
-                            col: Math.mod(idx, 2);
-                            username: p.username;
-                            initial: p.initial;
-                            frame: p.frame;
-                            is_speaking: p.is_speaking;
-                            is_muted: p.is_muted;
-                            has_video: p.has_video;
-                            is_screen_share: p.is_screen_share;
-                            connection_state: p.connection_state;
-                            peer_id: p.id;
-                            volume_changed(id, v) => { root.set_peer_volume(id, v); }
-                        }
-                    }
-                }
-
-                if root.chat_visible: ChatPanel {
-                    vertical-stretch: 1;
-                    messages: root.chat_messages;
-                    send-chat(content) => { root.send_chat(content); }
-                }
-            }
-
-            ControlDock {
+            background: Theme.bg-primary;
+            if root.peers.length == 0: VerticalLayout {
                 width: 100%;
-                toggle-mic => { root.toggle_mic(); }
-                toggle-camera => { root.toggle_camera(); }
-                toggle-screen-share => { root.toggle_screen_share(); }
-                toggle-deafen => { root.toggle_deafen(); }
-                leave-room => { root.leave_room(); }
-                mic_enabled: root.mic_enabled;
-                camera_enabled: root.camera_enabled;
-                screen_sharing: root.screen_sharing;
-                deafened: root.deafened;
+                height: 100%;
+                alignment: center;
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "Waiting for others to join";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-lg;
+                    font-weight: 600;
+                }
+                Text {
+                    text: "Share the invite link from the top bar";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-size-sm;
+                }
+            }
+            if root.peers.length > 0: GridLayout {
+                width: 100%;
+                height: 100%;
+                padding-top: 72px;
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-bottom: 112px;
+                spacing: Theme.spacing-md;
+                for p[idx] in root.peers: VideoTile {
+                    row: idx / 2;
+                    col: Math.mod(idx, 2);
+                    username: p.username;
+                    initial: p.initial;
+                    frame: p.frame;
+                    is_speaking: p.is_speaking;
+                    is_muted: p.is_muted;
+                    has_video: p.has_video;
+                    is_screen_share: p.is_screen_share;
+                    connection_state: p.connection_state;
+                    peer_id: p.id;
+                    avatar_index: idx;
+                    volume_changed(id, v) => { root.set_peer_volume(id, v); }
+                }
             }
         }
 
-        // Self view (bottom-right above the dock).
+        // ================= 2. Top nav (unified floating bar) =================
+        Rectangle {
+            x: 0px;
+            y: 10px;
+            width: 100%;
+            height: 44px;
+            background: transparent;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 44px;
+                    border-radius: Theme.radius-lg;
+                    background: Theme.bg-card;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    drop-shadow-offset-x: 0px;
+                    drop-shadow-offset-y: 2px;
+                    drop-shadow-blur: Theme.shadow-blur-sm;
+                    drop-shadow-color: Theme.shadow-color;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 6px;
+                        spacing: 4px;
+                        alignment: center;
+
+                        // Room info (no nested pill).
+                        Rectangle {
+                            height: 32px;
+                            HorizontalLayout {
+                                padding-left: Theme.spacing-xs;
+                                padding-right: Theme.spacing-xs;
+                                spacing: Theme.spacing-xs;
+                                alignment: center;
+                                Rectangle {
+                                    width: 7px;
+                                    height: 7px;
+                                    border-radius: 4px;
+                                    background: Theme.success;
+                                }
+                                Text {
+                                    text: root.room_name;
+                                    color: Theme.text-primary;
+                                    font-size: Theme.font-size-md;
+                                    font-weight: 600;
+                                }
+                                Text {
+                                    text: root.peer_count == 1 ? "· 1 peer" : "· " + root.peer_count + " peers";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-size-sm;
+                                }
+                            }
+                        }
+
+                        // Divider.
+                        Rectangle {
+                            width: 1px;
+                            height: 22px;
+                            background: Theme.border;
+                        }
+
+                        // Copy link — accent pill, like the PWA invite button.
+                        Rectangle {
+                            height: 30px;
+                            border-radius: Theme.radius-pill;
+                            background: Theme.accent;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 6px;
+                                alignment: center;
+                                LinkIcon {
+                                    width: 13px;
+                                    height: 13px;
+                                    stroke-width: 2.4px;
+                                    tint: #ffffff;
+                                }
+                                Text {
+                                    text: "Copy Link";
+                                    color: #ffffff;
+                                    font-size: Theme.font-size-sm;
+                                    font-weight: 600;
+                                }
+                            }
+                            link_touch := TouchArea {
+                                clicked => { root.copy_invite_link(); }
+                                mouse-cursor: pointer;
+                            }
+                            states [
+                                hover when link_touch.has-hover: { background: Theme.accent-strong; }
+                            ]
+                        }
+
+                        // Divider.
+                        Rectangle {
+                            width: 1px;
+                            height: 22px;
+                            background: Theme.border;
+                        }
+
+                        // Camera picker: icon + current camera + dropdown.
+                        Rectangle {
+                            height: 32px;
+                            border-radius: Theme.radius-sm;
+                            background: root.camera_picker_visible ? Theme.bg-hover : transparent;
+                            HorizontalLayout {
+                                padding-left: Theme.spacing-sm;
+                                padding-right: Theme.spacing-sm;
+                                spacing: Theme.spacing-xs;
+                                alignment: center;
+                                CameraIcon {
+                                    width: 14px;
+                                    height: 14px;
+                                    stroke-width: 2.2px;
+                                    tint: root.camera_enabled ? Theme.accent : Theme.text-faint;
+                                }
+                                Text {
+                                    text: root.current_camera_name;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.font-size-sm;
+                                    overflow: elide;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: "▾";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-size-xs;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            cam_touch := TouchArea {
+                                clicked => { root.camera_picker_visible = !root.camera_picker_visible; }
+                                mouse-cursor: pointer;
+                            }
+                            states [
+                                hover when cam_touch.has-hover && !root.camera_picker_visible: { background: Theme.bg-hover; }
+                            ]
+                            // Dropdown paints above the stage (nav comes later in the tree).
+                            if root.camera_picker_visible: Rectangle {
+                                y: 38px;
+                                width: 210px;
+                                border-radius: Theme.radius-sm;
+                                background: Theme.bg-secondary;
+                                border-width: 1px;
+                                border-color: Theme.border-strong;
+                                drop-shadow-offset-x: 0px;
+                                drop-shadow-offset-y: Theme.shadow-y;
+                                drop-shadow-blur: Theme.shadow-blur-md;
+                                drop-shadow-color: Theme.shadow-color;
+                                VerticalLayout {
+                                    padding: Theme.spacing-xs;
+                                    spacing: 2px;
+                                    for c[idx] in root.cameras: Rectangle {
+                                        width: 100%;
+                                        border-radius: Theme.radius-sm;
+                                        Text {
+                                            text: c;
+                                            color: Theme.text-primary;
+                                            font-size: Theme.font-size-sm;
+                                            overflow: elide;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        pick := TouchArea {
+                                            clicked => {
+                                                root.camera_selected(idx);
+                                                root.camera_picker_visible = false;
+                                            }
+                                            mouse-cursor: pointer;
+                                        }
+                                        states [
+                                            hover when pick.has-hover: { background: Theme.bg-hover; }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+
+                        // Screen-source picker: displays + windows on macOS; on
+                        // Linux the portal owns selection, so the entry is the
+                        // system picker itself.
+                        Rectangle {
+                            height: 32px;
+                            border-radius: Theme.radius-sm;
+                            background: root.screen_picker_visible ? Theme.bg-hover : transparent;
+                            HorizontalLayout {
+                                padding-left: Theme.spacing-sm;
+                                padding-right: Theme.spacing-sm;
+                                spacing: Theme.spacing-xs;
+                                alignment: center;
+                                ScreenIcon {
+                                    width: 14px;
+                                    height: 14px;
+                                    stroke-width: 2.2px;
+                                    tint: root.screen_sharing ? Theme.accent : Theme.text-faint;
+                                }
+                                Text {
+                                    text: root.current_screen_source_name;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.font-size-sm;
+                                    overflow: elide;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: "▾";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-size-xs;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            scr_touch := TouchArea {
+                                clicked => { root.screen_picker_visible = !root.screen_picker_visible; }
+                                mouse-cursor: pointer;
+                            }
+                            states [
+                                hover when scr_touch.has-hover && !root.screen_picker_visible: { background: Theme.bg-hover; }
+                            ]
+                            if root.screen_picker_visible: Rectangle {
+                                y: 38px;
+                                width: 260px;
+                                border-radius: Theme.radius-sm;
+                                background: Theme.bg-secondary;
+                                border-width: 1px;
+                                border-color: Theme.border-strong;
+                                drop-shadow-offset-x: 0px;
+                                drop-shadow-offset-y: Theme.shadow-y;
+                                drop-shadow-blur: Theme.shadow-blur-md;
+                                drop-shadow-color: Theme.shadow-color;
+                                VerticalLayout {
+                                    padding: Theme.spacing-xs;
+                                    spacing: 2px;
+                                    for s[idx] in root.screen_sources: Rectangle {
+                                        width: 100%;
+                                        border-radius: Theme.radius-sm;
+                                        Text {
+                                            text: s;
+                                            color: Theme.text-primary;
+                                            font-size: Theme.font-size-sm;
+                                            overflow: elide;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        scr_pick := TouchArea {
+                                            clicked => {
+                                                root.screen_source_selected(idx);
+                                                root.screen_picker_visible = false;
+                                            }
+                                            mouse-cursor: pointer;
+                                        }
+                                        states [
+                                            hover when scr_pick.has-hover: { background: Theme.bg-hover; }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+
+                        // Settings (opens the right sidebar; closes chat).
+                        NavButton {
+                            active: root.settings_visible;
+                            clicked => {
+                                root.settings_visible = !root.settings_visible;
+                                root.chat_visible = false;
+                            }
+                            GearIcon {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 16px;
+                                height: 16px;
+                                stroke-width: 2.2px;
+                                tint: root.settings_visible ? Theme.accent : Theme.text-secondary;
+                            }
+                        }
+
+                        // Chat toggle (opens the right sidebar; closes settings).
+                        NavButton {
+                            active: root.chat_visible;
+                            clicked => {
+                                root.settings_visible = false;
+                                root.toggle_chat();
+                            }
+                            ChatIcon {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 16px;
+                                height: 16px;
+                                stroke-width: 2.2px;
+                                tint: root.chat_visible ? Theme.accent : Theme.text-secondary;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ================= 3. Control dock (overlay, bottom center) =================
+        Rectangle {
+            x: 0px;
+            y: parent.height - 116px;
+            width: 100%;
+            height: 108px;
+            background: transparent;
+            HorizontalLayout {
+                alignment: center;
+                ControlDock {
+                    mic_enabled: root.mic_enabled;
+                    camera_enabled: root.camera_enabled;
+                    screen_sharing: root.screen_sharing;
+                    deafened: root.deafened;
+                    toggle-mic => { root.toggle_mic(); }
+                    toggle-camera => { root.toggle_camera(); }
+                    toggle-screen-share => { root.toggle_screen_share(); }
+                    toggle-deafen => { root.toggle_deafen(); }
+                    leave-room => { root.leave_room(); }
+                }
+            }
+        }
+
+        // ================= 4. Right sidebar (settings or chat) =================
+        if root.settings_visible: SettingsPanel {
+            x: parent.width - 300px;
+            y: 0px;
+            width: 300px;
+            height: 100%;
+            noise_gate_enabled: root.noise_gate_enabled;
+            noise_gate_threshold_db: root.noise_gate_threshold_db;
+            hpf_enabled: root.hpf_enabled;
+            input_devices: root.input_devices;
+            current_input_device: root.current_input_device;
+            output_devices: root.output_devices;
+            current_output_device: root.current_output_device;
+            toggle_noise_gate => { root.toggle_noise_gate(); }
+            set_noise_gate_threshold(v) => { root.set_noise_gate_threshold(v); }
+            toggle_hpf => { root.toggle_hpf(); }
+            select_input_device(idx) => { root.select_input_device(idx); }
+            select_output_device(idx) => { root.select_output_device(idx); }
+        }
+        if root.chat_visible && !root.settings_visible: ChatPanel {
+            x: parent.width - 320px;
+            y: 0px;
+            width: 320px;
+            height: 100%;
+            messages: root.chat_messages;
+            send-chat(content) => { root.send_chat(content); }
+        }
+
+        // ================= 5. Self view (overlay, bottom-right) =================
         VideoTile {
-            x: parent.width - 220px;
-            y: parent.height - 190px;
-            width: 200px;
+            x: parent.width - 232px;
+            y: parent.height - 192px;
+            width: 212px;
             height: 130px;
             username: "You";
             initial: "Y";
@@ -377,15 +533,16 @@ export component MainWindow inherits Window {
             is_muted: !root.mic_enabled;
             has_video: root.local_has_video;
             is_screen_share: root.screen_sharing;
+            avatar_index: 5;
         }
 
-        // Toast overlay (bottom strip, above everything).
+        // ================= 6. Toasts (topmost) =================
         VerticalLayout {
             width: 100%;
             height: 100%;
             padding: Theme.spacing-lg;
             spacing: Theme.spacing-sm;
-            alignment: end;
+            alignment: start;
             for t in root.toasts: ToastCard {
                 text: t.text;
                 kind: t.kind;

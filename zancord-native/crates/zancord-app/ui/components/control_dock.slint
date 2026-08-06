@@ -1,41 +1,33 @@
-// Control dock (Phase 4.4): horizontal bar of circular toggle buttons with
-// hover/pressed states and active highlighting.
+// Control dock v3 — mirrors the PWA: flat circular icon buttons with text
+// labels, off = muted, on = blurple, leave = red. No glass pill.
 
 import { Theme } from "../theme.slint";
+import { MicIcon, MicOffIcon, CameraIcon, CameraOffIcon, ScreenIcon, HeadphonesIcon, HeadphonesOffIcon, PhoneIcon } from "icons.slint";
 
 component DockButton inherits Rectangle {
-    in property <string> icon;
-    in property <string> tooltip;
-    in property <bool> active;
-    in property <bool> danger;
+    in property <bool> active: false;
+    in property <bool> danger: false;
     callback clicked();
 
     width: 56px;
     height: 56px;
     border-radius: 28px;
+    background: root.danger ? #f23f4214 : (root.active ? Theme.accent : Theme.bg-card);
     border-width: 1px;
-    border-color: Theme.border;
-    background: root.danger ? Theme.error : (root.active ? Theme.accent : Theme.bg-surface);
-    animate background { duration: 150ms; }
+    border-color: root.danger ? #f23f4259 : (root.active ? transparent : Theme.border);
+    animate background { duration: 120ms; }
 
     touch := TouchArea {
         clicked => { root.clicked(); }
         mouse-cursor: pointer;
     }
 
-    Text {
-        text: root.icon;
-        font-size: 22px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
     states [
         hover when touch.has-hover && !touch.pressed: {
-            background: root.danger ? Theme.error : (root.active ? Theme.accent-hover : Theme.bg-secondary);
+            background: root.danger ? #f23f4229 : (root.active ? Theme.accent-strong : Theme.bg-hover);
         }
         pressed when touch.pressed: {
-            background: root.active ? Theme.accent-hover : Theme.bg-secondary;
+            background: root.danger ? #f23f4233 : Theme.accent-strong;
         }
     ]
 }
@@ -52,49 +44,142 @@ export component ControlDock inherits Rectangle {
     callback toggle_deafen();
     callback leave_room();
 
-    height: 88px;
-    border-radius: Theme.radius-lg;
-    background: Theme.bg-surface;
-    border-width: 1px;
-    border-color: Theme.border;
+    background: transparent;
 
     HorizontalLayout {
-        Rectangle { horizontal-stretch: 1; }
-        HorizontalLayout {
-            spacing: Theme.spacing-md;
-            alignment: center;
+        spacing: Theme.spacing-md;
+        alignment: center;
 
-            DockButton {
-                icon: root.mic_enabled ? "🎤" : "🔇";
-                tooltip: "Toggle mic (Ctrl+M)";
-                active: root.mic_enabled;
-                clicked => { root.toggle_mic(); }
-            }
-            DockButton {
-                icon: root.camera_enabled ? "🎥" : "🚫";
-                tooltip: "Toggle camera (Ctrl+E)";
-                active: root.camera_enabled;
-                clicked => { root.toggle_camera(); }
-            }
-            DockButton {
-                icon: "🖥️";
-                tooltip: "Toggle screen share (Ctrl+Shift+S)";
-                active: root.screen_sharing;
-                clicked => { root.toggle_screen_share(); }
-            }
-            DockButton {
-                icon: root.deafened ? "🔕" : "🎧";
-                tooltip: "Toggle deafen (Ctrl+D)";
-                active: root.deafened;
-                clicked => { root.toggle_deafen(); }
-            }
-            DockButton {
-                icon: "📞";
-                tooltip: "Leave room";
-                danger: true;
-                clicked => { root.leave_room(); }
+        // Each button is a column: circle + label.
+        Rectangle {
+            width: 72px;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                DockButton {
+                    active: root.mic_enabled;
+                    clicked => { root.toggle_mic(); }
+                    if root.mic_enabled: MicIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: #ffffff;
+                    }
+                    if !root.mic_enabled: MicOffIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: Theme.text-secondary;
+                    }
+                }
+                Text {
+                    text: "Mic";
+                    color: root.mic_enabled ? Theme.text-primary : Theme.text-faint;
+                    font-size: Theme.font-size-xs;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
             }
         }
-        Rectangle { horizontal-stretch: 1; }
+        Rectangle {
+            width: 72px;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                DockButton {
+                    active: root.camera_enabled;
+                    clicked => { root.toggle_camera(); }
+                    if root.camera_enabled: CameraIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: #ffffff;
+                    }
+                    if !root.camera_enabled: CameraOffIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: Theme.text-secondary;
+                    }
+                }
+                Text {
+                    text: "Camera";
+                    color: root.camera_enabled ? Theme.text-primary : Theme.text-faint;
+                    font-size: Theme.font-size-xs;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        Rectangle {
+            width: 72px;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                DockButton {
+                    active: root.screen_sharing;
+                    clicked => { root.toggle_screen_share(); }
+                    ScreenIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: root.screen_sharing ? #ffffff : Theme.text-secondary;
+                    }
+                }
+                Text {
+                    text: "Screen";
+                    color: root.screen_sharing ? Theme.text-primary : Theme.text-faint;
+                    font-size: Theme.font-size-xs;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        Rectangle {
+            width: 72px;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                DockButton {
+                    active: root.deafened;
+                    clicked => { root.toggle_deafen(); }
+                    if root.deafened: HeadphonesOffIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: #ffffff;
+                    }
+                    if !root.deafened: HeadphonesIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: Theme.text-secondary;
+                    }
+                }
+                Text {
+                    text: "Deafen";
+                    color: root.deafened ? Theme.text-primary : Theme.text-faint;
+                    font-size: Theme.font-size-xs;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        Rectangle {
+            width: 72px;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                DockButton {
+                    danger: true;
+                    clicked => { root.leave_room(); }
+                    PhoneIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: Theme.error;
+                    }
+                }
+                Text {
+                    text: "Leave";
+                    color: Theme.error;
+                    font-size: Theme.font-size-xs;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+            }
+        }
     }
 }

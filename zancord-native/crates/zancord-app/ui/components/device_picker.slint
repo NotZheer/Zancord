@@ -1,5 +1,4 @@
-// DevicePicker (Phase 6): a dropdown showing the current device with a list
-// of alternatives (mic / output selection in the settings panel).
+// DevicePicker v3 — flat dropdown: current device, chevron, hover states.
 
 import { Theme } from "../theme.slint";
 
@@ -10,19 +9,32 @@ export component DevicePicker inherits Rectangle {
     property <bool> open: false;
 
     width: 100%;
-    height: 28px;
+    height: 34px;
     border-radius: Theme.radius-sm;
     border-width: 1px;
-    border-color: Theme.border;
+    border-color: root.open ? Theme.accent : Theme.border;
     background: Theme.bg-secondary;
+    animate border-color { duration: 100ms; }
 
-    Text {
-        text: root.current;
-        color: Theme.text-primary;
-        font-size: Theme.font-size-sm;
-        overflow: elide;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    HorizontalLayout {
+        padding-left: Theme.spacing-sm;
+        padding-right: Theme.spacing-sm;
+        spacing: Theme.spacing-xs;
+        alignment: center;
+        Text {
+            text: root.current;
+            color: Theme.text-primary;
+            font-size: Theme.font-size-sm;
+            overflow: elide;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.open ? "▴" : "▾";
+            color: Theme.text-faint;
+            font-size: Theme.font-size-xs;
+            vertical-alignment: center;
+        }
     }
 
     touch := TouchArea {
@@ -30,19 +42,23 @@ export component DevicePicker inherits Rectangle {
         mouse-cursor: pointer;
     }
     states [
-        hover when touch.has-hover: { background: Theme.bg-surface; }
+        hover when touch.has-hover && !root.open: { background: Theme.bg-hover; }
     ]
 
     if root.open: Rectangle {
-        y: 30px;
+        y: 36px;
         width: 100%;
-        border-radius: Theme.radius-md;
-        background: Theme.bg-surface;
+        border-radius: Theme.radius-sm;
+        background: Theme.bg-secondary;
         border-width: 1px;
-        border-color: Theme.border;
+        border-color: Theme.border-strong;
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: Theme.shadow-y;
+        drop-shadow-blur: Theme.shadow-blur-sm;
+        drop-shadow-color: Theme.shadow-color;
         VerticalLayout {
             padding: Theme.spacing-xs;
-            spacing: Theme.spacing-xs;
+            spacing: 2px;
             for d[idx] in root.devices: Rectangle {
                 width: 100%;
                 border-radius: Theme.radius-sm;
@@ -62,7 +78,7 @@ export component DevicePicker inherits Rectangle {
                     mouse-cursor: pointer;
                 }
                 states [
-                    hover when pick.has-hover: { background: Theme.bg-secondary; }
+                    hover when pick.has-hover: { background: Theme.bg-hover; }
                 ]
             }
         }
