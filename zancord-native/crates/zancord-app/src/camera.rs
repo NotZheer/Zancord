@@ -24,6 +24,7 @@ use zancord_transport::tracks::TrackKind;
 use zancord_video::codec::{create_encoder, VideoEncoderConfig};
 use zancord_video::convert::rgb_to_i420;
 
+use crate::bitrate::CongestionState;
 use crate::screen_share::{even_dims, post_local_preview};
 use crate::MainWindow;
 
@@ -42,20 +43,23 @@ pub struct CameraSession {
 }
 
 impl CameraSession {
-    /// Opens the webcam and spawns the capture/encode thread.
-    pub fn start(mesh: &MeshManager, window: Weak<MainWindow>) -> Result<Self> {
-        Self::start_with_channels(mesh.camera_tx(), mesh.feedback_rx(), window)
+    /// Opens the webcam (`camera_index`, see `available_cameras`) and spawns
+    /// the capture/encode thread.
+    pub fn start(mesh: &MeshManager, window: Weak<MainWindow>, camera_index: u32) -> Result<Self> {
+        Self::start_with_channels(mesh.camera_tx(), mesh.feedback_rx(), window, camera_index)
     }
 
     pub fn start_with_channels(
         camera_tx: tokio::sync::mpsc::Sender<EncodedVideoFrame>,
         mut feedback_rx: tokio::sync::broadcast::Receiver<RtcpFeedback>,
         window: Weak<MainWindow>,
+        camera_index: u32,
     ) -> Result<Self> {
         let config = CameraConfig {
             width: CAM_WIDTH,
             height: CAM_HEIGHT,
             fps: CAM_FPS,
+            index: camera_index,
         };
         // Opening the device can block (AVFoundation handshake) — the caller
         // already runs this on a blocking task; the loop thread then owns the
@@ -127,26 +131,39 @@ fn run_capture_loop(
         fps: CAM_FPS,
         bitrate_bps: CAM_BITRATE,
     })?;
+    let mut congestion = CongestionState::new(CAM_BITRATE);
     let mut last_keyframe = Instant::now() - KEYFRAME_INTERVAL;
     let mut last_frame = Instant::now();
     let mut last_report = Instant::now();
     let (mut frames_captured, mut frames_encoded, mut frames_sent) = (0u64, 0u64, 0u64);
     let (mut encode_us, mut encode_count) = (0u128, 0u64);
+    let mut frames_since_encoded = 0u32;
 
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
 
-        // PLI / FIR from any peer: emit an IDR on the next frame.
+        // PLI / FIR from any peer: emit an IDR on the next frame. REMB from
+        // the slowest receiver drives the congestion policy (frame-skip below).
         while let Ok(feedback) = feedback_rx.try_recv() {
-            if let RtcpFeedback::KeyframeRequest {
-                track: TrackKind::Camera,
-                ..
-            } = feedback
-            {
-                encoder.force_keyframe();
-                last_keyframe = Instant::now();
+            match feedback {
+                RtcpFeedback::KeyframeRequest {
+                    track: TrackKind::Camera,
+                    ..
+                } => {
+                    encoder.force_keyframe();
+                    last_keyframe = Instant::now();
+                }
+                RtcpFeedback::BitrateHint {
+                    track: TrackKind::Camera,
+                    peer_id,
+                    bitrate_bps,
+                } => {
+                    let policy = congestion.update(&peer_id, bitrate_bps, Instant::now());
+                    encoder.set_bitrate(policy.encoder_bps);
+                }
+                _ => {}
             }
         }
 
@@ -160,6 +177,13 @@ fn run_capture_loop(
             continue;
         }
         last_frame = Instant::now();
+        // Congestion control: send 1 of every N frames while the slowest
+        // receiver's REMB is below our target.
+        frames_since_encoded += 1;
+        if frames_since_encoded % congestion.policy(Instant::now()).frame_skip != 0 {
+            continue;
+        }
+        frames_since_encoded = 0;
 
         let (w, h) = even_dims(frame.width, frame.height);
         let yuv = match rgb_to_i420(&frame.data, w, h) {

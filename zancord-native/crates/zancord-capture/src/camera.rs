@@ -24,6 +24,8 @@ pub struct CameraConfig {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// Device index in [`available_cameras`] (0 = default/first camera).
+    pub index: u32,
 }
 
 impl Default for CameraConfig {
@@ -32,8 +34,30 @@ impl Default for CameraConfig {
             width: 1280,
             height: 720,
             fps: 30,
+            index: 0,
         }
     }
+}
+
+/// One enumerable webcam.
+#[derive(Debug, Clone)]
+pub struct CameraSource {
+    pub index: u32,
+    pub name: String,
+}
+
+/// Best-effort enumeration of connected cameras. Empty when the backend
+/// can't enumerate (some V4L setups) — open index 0 in that case.
+pub fn available_cameras() -> Vec<CameraSource> {
+    nokhwa::query(ApiBackend::Auto)
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| CameraSource {
+            index: i as u32,
+            name: c.human_name(),
+        })
+        .collect()
 }
 
 /// Platform-agnostic webcam capture.
@@ -86,28 +110,44 @@ impl NokhwaCameraCapturer {
             }
         });
 
-        let cameras = nokhwa::query(ApiBackend::Auto).unwrap_or_default();
+        let cameras = available_cameras();
         if cameras.is_empty() {
             warn!("no cameras enumerated; opening index 0 blindly");
         } else {
             info!(
                 cameras = cameras.len(),
-                names = ?cameras.iter().map(|c| c.human_name()).collect::<Vec<_>>(),
+                names = ?cameras.iter().map(|c| &c.name).collect::<Vec<_>>(),
                 "cameras enumerated"
             );
         }
-        let name = cameras
-            .first()
-            .map(|c| c.human_name())
-            .unwrap_or_else(|| "camera 0".to_string());
+        let (index, name) = match cameras.iter().find(|c| c.index == config.index) {
+            Some(source) => (source.index, source.name.clone()),
+            None => {
+                // The saved device is gone (unplugged); fall back to the first.
+                if !cameras.is_empty() && config.index != 0 {
+                    warn!(
+                        saved = config.index,
+                        "saved camera unavailable; using index 0"
+                    );
+                }
+                (
+                    0,
+                    cameras
+                        .first()
+                        .map(|c| c.name.clone())
+                        .unwrap_or_else(|| "camera 0".into()),
+                )
+            }
+        };
 
         let (frame_tx, frame_rx) = mpsc::channel::<CapturedVideoFrame>();
 
-        let mut camera = match Self::build_camera(primary_request(config), frame_tx.clone()) {
+        let mut camera = match Self::build_camera(index, primary_request(config), frame_tx.clone())
+        {
             Ok(camera) => camera,
             Err(err) => {
                 debug!(error = %err, "preferred camera format unavailable, falling back");
-                Self::build_camera(fallback_request(), frame_tx)?
+                Self::build_camera(index, fallback_request(), frame_tx)?
             }
         };
         camera
@@ -123,11 +163,12 @@ impl NokhwaCameraCapturer {
     }
 
     fn build_camera(
+        index: u32,
         request_type: RequestedFormatType,
         frame_tx: mpsc::Sender<CapturedVideoFrame>,
     ) -> Result<CallbackCamera> {
         let request = RequestedFormat::new::<RgbFormat>(request_type);
-        CallbackCamera::new(CameraIndex::Index(0), request, move |buffer| {
+        CallbackCamera::new(CameraIndex::Index(index), request, move |buffer| {
             match buffer.decode_image::<RgbFormat>() {
                 Ok(img) => {
                     let (width, height) = (img.width(), img.height());
@@ -186,5 +227,13 @@ mod tests {
     #[test]
     fn fallback_request_leaves_format_negotiation_open() {
         assert_eq!(fallback_request(), RequestedFormatType::None);
+    }
+
+    #[test]
+    fn config_defaults_to_first_camera() {
+        let config = CameraConfig::default();
+        assert_eq!(config.index, 0);
+        assert_eq!(config.width, 1280);
+        assert_eq!(config.fps, 30);
     }
 }

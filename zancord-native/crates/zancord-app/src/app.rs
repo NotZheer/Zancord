@@ -36,6 +36,7 @@ enum UiCommand {
     Leave,
     CopyLink,
     ToggleChat,
+    SelectCamera(u32),
 }
 
 pub struct App {
@@ -52,6 +53,9 @@ pub struct App {
     screen_share: Option<crate::screen_share::ScreenShareSession>,
     camera_session: Option<crate::camera::CameraSession>,
     local_state: MediaStatePayload,
+    /// Enumerated cameras (UI picker) + the current selection.
+    cameras: Vec<zancord_capture::CameraSource>,
+    camera_index: u32,
     cmd_tx: mpsc::Sender<UiCommand>,
 }
 
@@ -114,6 +118,15 @@ impl App {
         .context("audio pipeline failed to start")?;
         info!("audio pipeline running (mic -> Opus -> mesh, mesh -> mix -> speakers)");
 
+        // Camera picker state: enumerate devices once; prefer the saved
+        // choice when it still exists.
+        let cameras = zancord_capture::available_cameras();
+        let config = crate::config::AppConfig::load();
+        let camera_index = config
+            .camera_index
+            .filter(|i| cameras.iter().any(|c| c.index == *i))
+            .unwrap_or(0);
+
         let (cmd_tx, mut cmd_rx) = mpsc::channel(64);
         let mut app = Self {
             window: window.clone(),
@@ -131,6 +144,8 @@ impl App {
                 mic_enabled: true,
                 ..Default::default()
             },
+            cameras,
+            camera_index,
             cmd_tx,
         };
 
@@ -201,6 +216,17 @@ impl App {
     fn init_ui(&self) {
         let window = self.window.clone();
         let room = self.room.clone();
+        let camera_names: Vec<slint::SharedString> = self
+            .cameras
+            .iter()
+            .map(|c| c.name.as_str().into())
+            .collect();
+        let current_camera = self
+            .cameras
+            .iter()
+            .find(|c| c.index == self.camera_index)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("Camera {}", self.camera_index));
         let _ = window.upgrade_in_event_loop(move |w| {
             w.set_room_name(room.into());
             // Seed the models with empty VecModels so later mutations can
@@ -208,6 +234,8 @@ impl App {
             w.set_peers(ModelRc::new(VecModel::default()));
             w.set_chat_messages(ModelRc::new(VecModel::default()));
             w.set_toasts(ModelRc::new(VecModel::default()));
+            w.set_cameras(ModelRc::new(VecModel::from(camera_names)));
+            w.set_current_camera_name(current_camera.into());
 
             w.set_peer_count(0);
             w.set_mic_enabled(true);
@@ -262,6 +290,10 @@ impl App {
                 w.on_toggle_chat(move || {
                     let _ = c.try_send(UiCommand::ToggleChat);
                 });
+                let c = base.clone();
+                w.on_camera_selected(move |index| {
+                    let _ = c.try_send(UiCommand::SelectCamera(index as u32));
+                });
             })
             .map_err(|_| anyhow::anyhow!("window dropped before callbacks wired"))?;
         Ok(())
@@ -299,40 +331,8 @@ impl App {
                     })
                     .await;
                 if on {
-                    let camera_tx = mesh.camera_tx();
-                    let feedback_rx = mesh.feedback_rx();
-                    let window_clone = self.window.clone();
-                    // Opening the device (AVFoundation handshake) may block for
-                    // seconds — never run it on the async UI context.
-                    let start_res = tokio::task::spawn_blocking(move || {
-                        crate::camera::CameraSession::start_with_channels(
-                            camera_tx,
-                            feedback_rx,
-                            window_clone,
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {e}")));
-                    match start_res {
-                        Ok(session) => self.camera_session = Some(session),
-                        Err(err) => {
-                            self.local_state.camera_enabled = false;
-                            mesh.set_camera_enabled(false).await?;
-                            let _ = self
-                                .client
-                                .send(SignalMessage::MediaState {
-                                    peer_id: local_id.clone(),
-                                    state: self.local_state,
-                                })
-                                .await;
-                            self.notify(format!("Camera failed: {err}"), "error");
-                            let window = self.window.clone();
-                            let _ = window.upgrade_in_event_loop(|w| {
-                                w.set_camera_enabled(false);
-                                w.set_local_has_video(false);
-                            });
-                            return Ok(true);
-                        }
+                    if !self.start_camera_session(self.camera_index).await? {
+                        return Ok(true); // failure already reverted + toasted
                     }
                 } else if let Some(mut session) = self.camera_session.take() {
                     session.stop();
@@ -354,6 +354,37 @@ impl App {
                     },
                     "info",
                 );
+            }
+            UiCommand::SelectCamera(index) => {
+                self.camera_index = index;
+                let mut config = crate::config::AppConfig::load();
+                config.camera_index = Some(index);
+                if let Err(err) = config.save() {
+                    warn!(error = %err, "failed to save camera preference");
+                }
+                if self.local_state.camera_enabled {
+                    // Restart capture on the new device: drop the old session
+                    // and track, then re-add + reopen (the camera flag itself
+                    // is unchanged, so no MediaState broadcast is needed).
+                    if let Some(mut session) = self.camera_session.take() {
+                        session.stop();
+                    }
+                    mesh.set_camera_enabled(false).await?;
+                    mesh.set_camera_enabled(true).await?;
+                    if !self.start_camera_session(index).await? {
+                        return Ok(true);
+                    }
+                }
+                let name = self
+                    .cameras
+                    .iter()
+                    .find(|c| c.index == index)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| format!("Camera {index}"));
+                let window = self.window.clone();
+                let _ = window.upgrade_in_event_loop(move |w| {
+                    w.set_current_camera_name(name.into());
+                });
             }
             UiCommand::ToggleScreenShare => {
                 let on = !self.local_state.screen_sharing;
@@ -487,6 +518,56 @@ impl App {
             }
         }
         Ok(true)
+    }
+
+    /// Starts the capture session for `camera_index`. On failure the mesh
+    /// track + media state are reverted and an error toast is shown; returns
+    /// `false` in that case.
+    async fn start_camera_session(&mut self, index: u32) -> anyhow::Result<bool> {
+        let Some(mesh) = self.mesh.as_mut() else {
+            return Ok(false);
+        };
+        let camera_tx = mesh.camera_tx();
+        let feedback_rx = mesh.feedback_rx();
+        let window_clone = self.window.clone();
+        // Opening the device (AVFoundation handshake) may block for seconds —
+        // never run it on the async UI context.
+        let start_res = tokio::task::spawn_blocking(move || {
+            crate::camera::CameraSession::start_with_channels(
+                camera_tx,
+                feedback_rx,
+                window_clone,
+                index,
+            )
+        })
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {e}")));
+        match start_res {
+            Ok(session) => {
+                self.camera_session = Some(session);
+                Ok(true)
+            }
+            Err(err) => {
+                self.local_state.camera_enabled = false;
+                if let Some(mesh) = self.mesh.as_mut() {
+                    mesh.set_camera_enabled(false).await?;
+                }
+                let _ = self
+                    .client
+                    .send(SignalMessage::MediaState {
+                        peer_id: self.self_id.clone(),
+                        state: self.local_state,
+                    })
+                    .await;
+                self.notify(format!("Camera failed: {err}"), "error");
+                let window = self.window.clone();
+                let _ = window.upgrade_in_event_loop(|w| {
+                    w.set_camera_enabled(false);
+                    w.set_local_has_video(false);
+                });
+                Ok(false)
+            }
+        }
     }
 
     /// Routes one signaling message; returns false when the loop must end.
@@ -661,13 +742,9 @@ impl App {
                 self.remove_peer_tile(&peer_id);
             }
             MeshEvent::IceStateChanged { peer_id, state } => {
-                let label = match state {
-                    IceState::Connected | IceState::Completed => "connected",
-                    IceState::Failed => "failed",
-                    IceState::Disconnected => "disconnected",
-                    _ => "connecting",
-                };
+                let label = ice_state_label(state);
                 info!(peer = %peer_id, %label, "ice state");
+                self.set_peer_tile_connection(&peer_id, label);
             }
             MeshEvent::MediaState { peer_id, state } => {
                 info!(peer = %peer_id, mic = state.mic_enabled, screen = state.screen_sharing, "peer media state");
@@ -692,6 +769,7 @@ impl App {
                     is_muted: false,
                     has_video: false,
                     is_screen_share: false,
+                    connection_state: "connecting".into(),
                 });
                 w.set_peer_count(peers.row_count() as i32);
             }
@@ -739,6 +817,24 @@ impl App {
                     if let Some(mut p) = peers.row_data(i) {
                         if p.id.as_str() == id {
                             p.is_screen_share = sharing;
+                            peers.set_row_data(i, p);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn set_peer_tile_connection(&self, id: &str, state: &str) {
+        let window = self.window.clone();
+        let id = id.to_owned();
+        let state = state.to_owned();
+        let _ = window.upgrade_in_event_loop(move |w| {
+            if let Some(peers) = w.get_peers().as_any().downcast_ref::<VecModel<PeerData>>() {
+                for i in 0..peers.row_count() {
+                    if let Some(mut p) = peers.row_data(i) {
+                        if p.id.as_str() == id {
+                            p.connection_state = state.clone().into();
                             peers.set_row_data(i, p);
                         }
                     }
@@ -830,6 +926,17 @@ fn format_timestamp(ms: u64) -> String {
     format!("{:02}:{:02}", (secs / 60) % 60, secs % 60)
 }
 
+/// Maps an ICE transport state to the tile's connection label (drives the
+/// status dot in `VideoTile`).
+pub fn ice_state_label(state: IceState) -> &'static str {
+    match state {
+        IceState::Connected | IceState::Completed => "connected",
+        IceState::Failed => "failed",
+        IceState::Disconnected => "disconnected",
+        _ => "connecting",
+    }
+}
+
 /// Resolves the default device id (or the first device, or none).
 pub fn default_device(devices: Vec<zancord_audio::devices::AudioDevice>) -> Option<String> {
     devices
@@ -837,4 +944,30 @@ pub fn default_device(devices: Vec<zancord_audio::devices::AudioDevice>) -> Opti
         .find(|d| d.is_default)
         .or_else(|| devices.first())
         .map(|d| d.id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ice_state_labels() {
+        assert_eq!(ice_state_label(IceState::Connected), "connected");
+        assert_eq!(ice_state_label(IceState::Completed), "connected");
+        assert_eq!(ice_state_label(IceState::Failed), "failed");
+        assert_eq!(ice_state_label(IceState::Disconnected), "disconnected");
+        // Everything pre-connected maps to the amber "connecting" state.
+        for state in [
+            IceState::New,
+            IceState::Checking,
+            IceState::Disconnected,
+            IceState::Closed,
+        ] {
+            let label = ice_state_label(state);
+            assert!(
+                label == "connecting" || label == "disconnected",
+                "unexpected label for {state:?}: {label}"
+            );
+        }
+    }
 }

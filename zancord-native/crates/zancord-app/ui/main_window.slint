@@ -32,6 +32,10 @@ export component MainWindow inherits Window {
     in property <bool> deafened;
     in property <string> room_name;
     in property <int> peer_count;
+    // Camera picker (top bar).
+    in property <[string]> cameras;
+    in property <string> current_camera_name;
+    property <bool> camera_picker_visible: false;
     in-out property <bool> chat_visible: true;
 
     // Chat + toasts.
@@ -47,6 +51,7 @@ export component MainWindow inherits Window {
     callback send_chat(string);
     callback copy_invite_link();
     callback toggle_chat();
+    callback camera_selected(int);
 
     background: Theme.bg-primary;
 
@@ -97,6 +102,60 @@ export component MainWindow inherits Window {
                         states [
                             hover when touch.has-hover: { background: Theme.bg-secondary; }
                         ]
+                    }
+                    // Camera device picker: button shows the current camera,
+                    // clicking it drops down the enumerated list.
+                    Rectangle {
+                        width: 170px;
+                        Text {
+                            text: "🎥 " + root.current_camera_name;
+                            color: Theme.text-secondary;
+                            font-size: Theme.font-size-sm;
+                            overflow: elide;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        cam_touch := TouchArea {
+                            clicked => { root.camera_picker_visible = !root.camera_picker_visible; }
+                            mouse-cursor: pointer;
+                        }
+                        states [
+                            hover when cam_touch.has-hover: { background: Theme.bg-secondary; }
+                        ]
+                        if root.camera_picker_visible: Rectangle {
+                            y: 44px;
+                            width: 190px;
+                            border-radius: Theme.radius-md;
+                            background: Theme.bg-surface;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            VerticalLayout {
+                                padding: Theme.spacing-xs;
+                                spacing: Theme.spacing-xs;
+                                for c[idx] in root.cameras: Rectangle {
+                                    width: 100%;
+                                    border-radius: Theme.radius-sm;
+                                    Text {
+                                        text: c;
+                                        color: Theme.text-primary;
+                                        font-size: Theme.font-size-sm;
+                                        overflow: elide;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    pick := TouchArea {
+                                        clicked => {
+                                            root.camera_selected(idx);
+                                            root.camera_picker_visible = false;
+                                        }
+                                        mouse-cursor: pointer;
+                                    }
+                                    states [
+                                        hover when pick.has-hover: { background: Theme.bg-secondary; }
+                                    ]
+                                }
+                            }
+                        }
                     }
                     Rectangle {
                         Text {
@@ -153,6 +212,7 @@ export component MainWindow inherits Window {
                             is_muted: p.is_muted;
                             has_video: p.has_video;
                             is_screen_share: p.is_screen_share;
+                            connection_state: p.connection_state;
                         }
                     }
                 }

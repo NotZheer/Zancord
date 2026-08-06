@@ -24,6 +24,7 @@ use zancord_transport::tracks::TrackKind;
 use zancord_video::codec::{create_decoder, create_encoder, VideoEncoderConfig};
 use zancord_video::convert::{bgra_to_i420, i420_to_rgba};
 
+use crate::bitrate::CongestionState;
 use crate::MainWindow;
 
 /// v1 capture profile: 720p15 at ~1.2 Mbps (fast enough for software encode).
@@ -136,6 +137,7 @@ fn run_capture_loop(
         fps: SHARE_FPS,
         bitrate_bps: SHARE_BITRATE,
     })?;
+    let mut congestion = CongestionState::new(SHARE_BITRATE);
     let mut audio_encoder = OpusEncoder::new_stereo(SCREEN_AUDIO_BITRATE)?;
     let mut audio_buf: Vec<i16> = Vec::with_capacity(FRAME_SIZE_STEREO * 2);
     let mut last_keyframe = Instant::now() - KEYFRAME_INTERVAL;
@@ -143,6 +145,7 @@ fn run_capture_loop(
     let mut last_report = Instant::now();
     let (mut frames_captured, mut frames_sent, mut audio_packets_sent) = (0u64, 0u64, 0u64);
     let (mut encode_us, mut encode_count) = (0u128, 0u64);
+    let mut frames_since_encoded = 0u32;
     let (mut send_us, mut send_count) = (0u128, 0u64);
 
     loop {
@@ -150,15 +153,26 @@ fn run_capture_loop(
             break;
         }
 
-        // PLI / FIR from any peer: emit an IDR on the next frame.
+        // PLI / FIR from any peer: emit an IDR on the next frame. REMB from
+        // the slowest receiver drives the congestion policy (frame-skip below).
         while let Ok(feedback) = feedback_rx.try_recv() {
-            if let RtcpFeedback::KeyframeRequest {
-                track: TrackKind::Screen,
-                ..
-            } = feedback
-            {
-                encoder.force_keyframe();
-                last_keyframe = Instant::now();
+            match feedback {
+                RtcpFeedback::KeyframeRequest {
+                    track: TrackKind::Screen,
+                    ..
+                } => {
+                    encoder.force_keyframe();
+                    last_keyframe = Instant::now();
+                }
+                RtcpFeedback::BitrateHint {
+                    track: TrackKind::Screen,
+                    peer_id,
+                    bitrate_bps,
+                } => {
+                    let policy = congestion.update(&peer_id, bitrate_bps, Instant::now());
+                    encoder.set_bitrate(policy.encoder_bps);
+                }
+                _ => {}
             }
         }
 
@@ -166,6 +180,13 @@ fn run_capture_loop(
         if last_frame.elapsed() >= Duration::from_millis(1000 / SHARE_FPS as u64) {
             while let Ok(frame) = capturer.video_frame_rx().try_recv() {
                 frames_captured += 1;
+                // Congestion control: send 1 of every N frames while the
+                // slowest receiver's REMB is below our target.
+                frames_since_encoded += 1;
+                if frames_since_encoded % congestion.policy(Instant::now()).frame_skip != 0 {
+                    continue;
+                }
+                frames_since_encoded = 0;
                 let (w, h) = even_dims(frame.width, frame.height);
                 let yuv = match bgra_to_i420(&frame.data, w, h) {
                     Ok(yuv) => yuv,

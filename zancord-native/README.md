@@ -44,4 +44,24 @@ cargo clippy --workspace -- -D warnings
 
 macOS screen capture requires signing: `codesign --force --sign - target/release/zancord-app`
 
+## Media Profiles & Bitrate (Phase 6)
+
+| Stream | Profile | Encoder target | Notes |
+|--------|---------|----------------|-------|
+| Camera | 720p30 | 2 Mbps | Software H.264 (openh264) — the encode budget for smooth 30 fps |
+| Screen | 720p15 | 1.2 Mbps | Plus Opus screen-audio (macOS SCK / Linux monitor) |
+
+- **Why not 1080p by default?** The 1080p branding describes the architecture's
+  ceiling, not the default profile: full-mesh software encoding at 1080p would
+  burn 4-6x the CPU per peer. 720p is the standard videoconferencing profile
+  (PWA setting was "720P @ 30 FPS").
+- **Congestion control (REMB):** remote receivers' `ReceiverEstimatedMaximumBitrate`
+  is classified per track and drives a frame-skip ratio (send 1 of every N
+  frames) plus a recorded encoder bitrate target (openh264 applies it on
+  re-initialization). The slowest peer wins; hints expire after 5 s, with a
+  200 kbps floor and a 1:5 frame-skip cap.
+- **Camera picker:** the top-bar dropdown enumerates webcams (nokhwa `query`),
+  persists the choice in `config.json` (`camera_index`), and hot-swaps the
+  device mid-call (restarts capture + renegotiates the camera track).
+
 See [AGENT.md](AGENT.md) for architecture, constraints, and conventions.

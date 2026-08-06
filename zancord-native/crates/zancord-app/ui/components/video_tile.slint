@@ -11,6 +11,13 @@ export component VideoTile inherits Rectangle {
     in property <bool> is_muted;
     in property <bool> has_video;
     in property <bool> is_screen_share;
+    in property <string> connection_state;
+
+    function connection_color(state: string) -> color {
+        if state == "connected" { return Theme.success; }
+        if state == "failed" || state == "disconnected" { return Theme.error; }
+        return Theme.warning; // connecting / unknown
+    }
 
     border-radius: Theme.radius-md;
     border-width: 2px;
@@ -75,6 +82,15 @@ export component VideoTile inherits Rectangle {
                 vertical-alignment: center;
             }
             Rectangle { horizontal-stretch: 1; }
+            // Connection indicator: green connected, amber connecting,
+            // red failed/disconnected (a Text dot so it centers like the
+            // other badges).
+            Text {
+                text: "●";
+                color: root.connection_color(root.connection_state);
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
             Text {
                 text: root.is_screen_share ? "🖥️" : "";
                 font-size: Theme.font-size-sm;

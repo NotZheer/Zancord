@@ -18,9 +18,13 @@ pub enum RtcpFeedback {
     /// The remote decoder lost the stream; the local encoder for `track`
     /// should emit a keyframe immediately.
     KeyframeRequest { peer_id: String, track: TrackKind },
-    /// Receiver-estimated maximum bitrate; the local encoder should not
-    /// exceed this aggregate bitrate for the peer.
-    BitrateHint { peer_id: String, bitrate_bps: u32 },
+    /// Receiver-estimated maximum bitrate for `track`; the local pipeline
+    /// should not exceed this aggregate bitrate for the peer.
+    BitrateHint {
+        peer_id: String,
+        track: TrackKind,
+        bitrate_bps: u32,
+    },
 }
 
 /// Rate-limits keyframe request forwarding (1 per 500 ms).
@@ -89,6 +93,7 @@ pub fn classify(
             if remb.bitrate.is_finite() && remb.bitrate > 0.0 {
                 out.push(RtcpFeedback::BitrateHint {
                     peer_id: peer_id.to_owned(),
+                    track,
                     bitrate_bps: remb.bitrate as u32,
                 });
             }
@@ -202,6 +207,7 @@ mod tests {
             out,
             vec![RtcpFeedback::BitrateHint {
                 peer_id: "peer-c".to_owned(),
+                track: TrackKind::Camera,
                 bitrate_bps: 1_500_000,
             }]
         );

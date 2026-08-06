@@ -18,7 +18,9 @@ pub mod linux_audio;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-pub use camera::{CameraCapturer, CameraConfig, NokhwaCameraCapturer};
+pub use camera::{
+    available_cameras, CameraCapturer, CameraConfig, CameraSource, NokhwaCameraCapturer,
+};
 pub use traits::{
     CaptureConfig, CaptureSource, CaptureSourceType, CapturedAudioFrame, CapturedVideoFrame,
     PixelFormat, ScreenCapturer,
