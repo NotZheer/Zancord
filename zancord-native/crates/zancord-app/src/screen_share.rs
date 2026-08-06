@@ -137,9 +137,13 @@ fn run_capture_loop(
         bitrate_bps: SHARE_BITRATE,
     })?;
     let mut audio_encoder = OpusEncoder::new_stereo(SCREEN_AUDIO_BITRATE)?;
-    let mut audio_buf: Vec<i16> = Vec::with_capacity(FRAME_SIZE_STEREO);
+    let mut audio_buf: Vec<i16> = Vec::with_capacity(FRAME_SIZE_STEREO * 2);
     let mut last_keyframe = Instant::now() - KEYFRAME_INTERVAL;
     let mut last_frame = Instant::now();
+    let mut last_report = Instant::now();
+    let (mut frames_captured, mut frames_sent, mut audio_packets_sent) = (0u64, 0u64, 0u64);
+    let (mut encode_us, mut encode_count) = (0u128, 0u64);
+    let (mut send_us, mut send_count) = (0u128, 0u64);
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -161,6 +165,7 @@ fn run_capture_loop(
         // Video: pace to SHARE_FPS.
         if last_frame.elapsed() >= Duration::from_millis(1000 / SHARE_FPS as u64) {
             while let Ok(frame) = capturer.video_frame_rx().try_recv() {
+                frames_captured += 1;
                 let (w, h) = even_dims(frame.width, frame.height);
                 let yuv = match bgra_to_i420(&frame.data, w, h) {
                     Ok(yuv) => yuv,
@@ -173,10 +178,17 @@ fn run_capture_loop(
                     encoder.force_keyframe();
                     last_keyframe = Instant::now();
                 }
+                let t0 = Instant::now();
                 let encoded = encoder.encode(&yuv)?;
+                encode_us += t0.elapsed().as_micros();
+                encode_count += 1;
+                let t1 = Instant::now();
                 if screen_tx.blocking_send(encoded).is_err() {
                     bail!("screen video channel closed");
                 }
+                send_us += t1.elapsed().as_micros();
+                send_count += 1;
+                frames_sent += 1;
                 // Local preview: BGRA → RGBA (byte swap).
                 if let Some(preview) = bgra_to_rgba(&frame.data, w, h) {
                     post_local_preview(&window, preview, w, h);
@@ -193,8 +205,12 @@ fn run_capture_loop(
                 for sample in audio.pcm_data {
                     let s = (sample * 32768.0).round().clamp(-32768.0, 32767.0) as i16;
                     audio_buf.push(s);
-                    if audio_buf.len() == FRAME_SIZE_STEREO {
-                        let packet = audio_encoder.encode(&audio_buf)?;
+                    if audio_buf.len() >= FRAME_SIZE_STEREO {
+                        // Chunk boundaries vary by platform (SCK / PipeWire) —
+                        // send exactly one 20 ms frame and keep any overshoot
+                        // for the next one instead of dropping it.
+                        let frame: Vec<i16> = audio_buf.drain(..FRAME_SIZE_STEREO).collect();
+                        let packet = audio_encoder.encode(&frame)?;
                         if screen_audio_tx
                             .blocking_send(zancord_protocol::EncodedAudioFrame {
                                 data: packet,
@@ -207,10 +223,33 @@ fn run_capture_loop(
                             audio_buf.clear();
                             break;
                         }
-                        audio_buf.clear();
+                        audio_packets_sent += 1;
                     }
                 }
             }
+        }
+
+        if last_report.elapsed() >= Duration::from_secs(5) {
+            let avg_ms =
+                u64::try_from(encode_us / encode_count.max(1) as u128 / 1000).unwrap_or(u64::MAX);
+            let send_ms =
+                u64::try_from(send_us / send_count.max(1) as u128 / 1000).unwrap_or(u64::MAX);
+            info!(
+                frames_captured,
+                frames_sent,
+                audio_packets_sent,
+                avg_encode_ms = avg_ms,
+                avg_send_ms = send_ms,
+                "screen share activity (last 5s)"
+            );
+            frames_captured = 0;
+            frames_sent = 0;
+            audio_packets_sent = 0;
+            encode_us = 0;
+            encode_count = 0;
+            send_us = 0;
+            send_count = 0;
+            last_report = Instant::now();
         }
 
         std::thread::sleep(Duration::from_millis(5));
@@ -233,20 +272,30 @@ pub fn spawn_remote_video_forwarder(
                 return;
             }
         };
+        let mut received = 0u64;
         let mut decoded = 0u64;
+        let mut reported_first = false;
         let mut last_report = Instant::now();
         while let Some(frame) = rx.recv().await {
+            if last_report.elapsed() >= Duration::from_secs(5) {
+                info!(
+                    peer = %peer_id,
+                    received,
+                    decoded,
+                    "video activity (last 5s): decoded=net->screen"
+                );
+                received = 0;
+                decoded = 0;
+                last_report = Instant::now();
+            }
+            received += 1;
             let Ok(Some(i420)) = decoder.decode(&frame.data) else {
                 continue; // waiting for a keyframe / corrupt frame skipped
             };
             decoded += 1;
-            if decoded == 1 {
+            if !reported_first {
                 info!(peer = %peer_id, width = i420.width, height = i420.height, "first remote video frame decoded");
-            }
-            if last_report.elapsed() >= Duration::from_secs(5) {
-                info!(peer = %peer_id, decoded, "video activity (last 5s): decoded=net->screen");
-                decoded = 0;
-                last_report = Instant::now();
+                reported_first = true;
             }
             let Ok(rgba) = i420_to_rgba(&i420) else {
                 continue;

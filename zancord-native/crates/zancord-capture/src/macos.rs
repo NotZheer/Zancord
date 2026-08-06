@@ -309,6 +309,12 @@ fn video_config(config: &CaptureConfig) -> SCStreamConfiguration {
 /// Converts a captured pixel buffer to a packed BGRA frame (row padding
 /// stripped) and sends it on the channel.
 fn push_video_frame(tx: &Sender<CapturedVideoFrame>, sample: &CMSampleBuffer) {
+    // SCK delivery telemetry: how many frames the OS actually hands us.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    static DELIVERED: AtomicU64 = AtomicU64::new(0);
+    static LAST_LOG: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
     let Some(pb) = sample.image_buffer() else {
         return;
     };
@@ -316,6 +322,16 @@ fn push_video_frame(tx: &Sender<CapturedVideoFrame>, sample: &CMSampleBuffer) {
         debug!("could not lock pixel buffer");
         return;
     };
+    let delivered = DELIVERED.fetch_add(1, Ordering::Relaxed) + 1;
+    let now = std::time::Instant::now();
+    if let Ok(mut last) = LAST_LOG.lock() {
+        if last.map_or(true, |t| {
+            now.duration_since(t) >= std::time::Duration::from_secs(5)
+        }) {
+            info!(delivered, "screen capture frames delivered by SCK");
+            *last = Some(now);
+        }
+    }
     let width = guard.width() as u32;
     let height = guard.height() as u32;
     let bpr = guard.bytes_per_row();
