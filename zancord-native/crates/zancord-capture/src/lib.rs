@@ -4,6 +4,7 @@
 //! `#[cfg(target_os = ...)]`:
 //! - macOS: ScreenCaptureKit
 //! - Linux: PipeWire + XDG Desktop Portal
+//! - Windows: Desktop Duplication API (display capture, no system audio yet)
 //! - Camera (all platforms): nokhwa (AVFoundation / V4L2 / MediaFoundation)
 
 #![deny(clippy::all)]
@@ -17,6 +18,8 @@ pub mod linux;
 pub mod linux_audio;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 pub use camera::{
     available_cameras, CameraCapturer, CameraConfig, CameraSource, NokhwaCameraCapturer,
@@ -39,7 +42,13 @@ pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
 }
 
 /// Creates the platform screen capturer.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
+    Ok(Box::new(crate::windows::WindowsScreenCapturer::new()))
+}
+
+/// Creates the platform screen capturer.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn create_capturer() -> anyhow::Result<Box<dyn ScreenCapturer>> {
     anyhow::bail!("screen capture is not supported on this platform")
 }

@@ -13,7 +13,7 @@ screen sharing — implemented in Rust with a Slint UI. Full-mesh P2P over Tails
 | 1C | Audio pipeline | ✅ |
 | 1D | WebRTC transport | ✅ |
 | 2 | Voice call end-to-end (CLI harness) | ✅ loopback-verified |
-| 3 | Capture + video | ✅ screen (SCK/PipeWire), camera (nokhwa), H.264/VP8 |
+| 3 | Capture + video | ✅ screen (SCK/PipeWire/DDA), camera (nokhwa), H.264 |
 | 4 | Slint UI | ✅ |
 | 5 | Full integration | 🟡 5.1 screen share E2E ✅; 5.2 camera E2E code-complete, awaiting on-device verification |
 | 6 | Polish & parity | ⬜ |
@@ -67,6 +67,9 @@ macOS screen capture requires signing: `codesign --force --sign - target/release
   (macOS `SCShareableContent`); the choice persists (`screen_source_id`) and
   hot-swaps mid-share. On Linux the XDG portal remains the picker (the entry
   is the system picker itself), and system audio comes from a PipeWire
-  default-sink monitor — video-only if the monitor fails.
+  default-sink monitor — video-only if the monitor fails. On Windows the
+  picker lists displays only (Desktop Duplication API) and capture is at the
+  display's native resolution (no downscale; the encoder re-initializes on
+  size changes) — window capture and system audio are not implemented yet.
 
 See [AGENT.md](AGENT.md) for architecture, constraints, and conventions.
