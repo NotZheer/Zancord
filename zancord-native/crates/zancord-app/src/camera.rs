@@ -234,7 +234,8 @@ fn run_capture_loop(
     Ok(())
 }
 
-/// RGB24 → RGBA with a horizontal flip (local preview only).
+/// RGB24 → RGBA with a horizontal flip (local preview only). Output order is
+/// R,G,B,A (Slint `Rgba8Pixel`); writing B,G,R,A here turns skin blue.
 fn rgb_to_rgba_mirrored(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     let expected = width as usize * height as usize * 3;
     if data.len() != expected || width == 0 {
@@ -246,7 +247,7 @@ fn rgb_to_rgba_mirrored(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>>
     for row in 0..h {
         for col in 0..w {
             let src = (row * w + (w - 1 - col)) * 3;
-            out.extend_from_slice(&[data[src + 2], data[src + 1], data[src], 255]);
+            out.extend_from_slice(&[data[src], data[src + 1], data[src + 2], 255]);
         }
     }
     Some(out)

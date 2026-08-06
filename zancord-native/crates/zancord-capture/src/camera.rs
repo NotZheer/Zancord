@@ -64,8 +64,8 @@ pub fn available_cameras() -> Vec<CameraSource> {
 pub trait CameraCapturer: Send + 'static {
     /// Human-readable camera name (for logs).
     fn name(&self) -> String;
-    /// Blocks until the next frame (RGB24) arrives; `Ok(None)` once the
-    /// camera is stopped/closed.
+    /// Blocks until the next frame (RGB888 — nokhwa's `RgbFormat` output)
+    /// arrives; `Ok(None)` once the camera is stopped/closed.
     fn next_frame(&mut self) -> Result<Option<CapturedVideoFrame>>;
     /// Stops the device; the frame channel closes and `next_frame` returns
     /// `Ok(None)`.

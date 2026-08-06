@@ -191,6 +191,8 @@ pub fn nv12_to_i420(
 }
 
 /// Convert planar I420 to RGBA (for UI display). Alpha is set to 255.
+/// Output order is R,G,B,A — what Slint's `Rgba8Pixel` expects (writing
+/// B,G,R,A here turns skin blue).
 pub fn i420_to_rgba(frame: &I420Frame) -> Result<Vec<u8>, ConversionError> {
     check_dims(frame.width, frame.height)?;
     let (y_size, uv_size) = yuv_sizes(frame.width, frame.height);
@@ -216,9 +218,9 @@ pub fn i420_to_rgba(frame: &I420Frame) -> Result<Vec<u8>, ConversionError> {
             let v = frame.v[(row / 2) * (w / 2) + col / 2];
             let (r, g, b) = yuv_to_rgba(y, u, v);
             let px = (row * w + col) * 4;
-            out[px] = b;
+            out[px] = r;
             out[px + 1] = g;
-            out[px + 2] = r;
+            out[px + 2] = b;
             out[px + 3] = 255;
         }
     }
@@ -303,6 +305,21 @@ mod tests {
         assert!(white
             .chunks_exact(4)
             .all(|c| c[0] == 255 && c[1] == 255 && c[2] == 255));
+    }
+
+    #[test]
+    fn i420_to_rgba_preserves_channel_order() {
+        // A red source pixel must come out RED in R,G,B,A order — a B/R swap
+        // here is the classic "smurf skin" bug (blue people in calls).
+        let mut px = gray_rgba(0, 2, 2);
+        px[2] = 255; // BGRA red
+        px[3] = 255;
+        let yuv = bgra_to_i420(&px, 2, 2).unwrap();
+        let rgba = i420_to_rgba(&yuv).unwrap();
+        let (r, g, b) = (rgba[0], rgba[1], rgba[2]);
+        assert!(r > 200, "red channel should dominate, got r={r}");
+        assert!(b < 60, "blue channel should be near zero, got b={b}");
+        assert!(g < 60, "green channel should be near zero, got g={g}");
     }
 
     #[test]
