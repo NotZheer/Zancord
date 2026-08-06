@@ -200,7 +200,7 @@ fn classify(limiter: &mut RateLimiter, msg: &SignalMessage) -> Outcome {
 
 fn rate_limit_message(kind: MessageKind) -> &'static str {
     match kind {
-        MessageKind::Signal => "signal rate limit exceeded (30/s)",
+        MessageKind::Signal => "signal rate limit exceeded (200/s)",
         MessageKind::Chat => "chat rate limit exceeded (5/s)",
         MessageKind::State => "media state rate limit exceeded (10/s)",
         MessageKind::Join => "join rate limit exceeded (3 per 10s)",
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn signal_messages_use_the_signal_bucket() {
         let mut limiter = RateLimiter::new();
-        for _ in 0..30 {
+        for _ in 0..200 {
             let msg = SignalMessage::IceCandidate {
                 target: "x".into(),
                 sender: "y".into(),

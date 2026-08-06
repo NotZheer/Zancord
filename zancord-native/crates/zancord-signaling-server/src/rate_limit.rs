@@ -1,5 +1,5 @@
 //! Per-peer token-bucket rate limiting (Phase 1A.4):
-//! signal 30/s, chat 5/s, state 10/s, join-room 3 per 10s.
+//! signal 200/s, chat 5/s, state 10/s, join-room 3 per 10s.
 
 use std::time::Instant;
 
@@ -73,11 +73,13 @@ impl Default for RateLimiter {
 }
 
 impl RateLimiter {
-    /// Rates from the master plan: signal 30/s, chat 5/s, state 10/s, join 3/10s.
+    /// Rates: signal 200/s (WebRTC ICE trickle bursts + renegotiation easily
+    /// exceed 30/s on macOS, where candidate gathering is bursty), chat 5/s,
+    /// state 10/s, join 3/10s.
     pub fn new() -> Self {
         Self {
             buckets: [
-                TokenBucket::new(30.0, 30.0),
+                TokenBucket::new(200.0, 200.0),
                 TokenBucket::new(5.0, 5.0),
                 TokenBucket::new(10.0, 10.0),
                 TokenBucket::new(3.0, 3.0 / 10.0),
@@ -135,7 +137,7 @@ mod tests {
     fn rate_limiter_enforces_per_kind_limits() {
         let mut rl = RateLimiter::new();
         let t0 = start();
-        for _ in 0..30 {
+        for _ in 0..200 {
             assert!(rl.allow_at(MessageKind::Signal, t0));
         }
         assert!(!rl.allow_at(MessageKind::Signal, t0));
